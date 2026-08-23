@@ -53,11 +53,10 @@ pub fn lower_softmax_recursive<'a, B: GpuBackend>(
     let node = &graph.nodes[node_id];
 
     let saved_param = saved_params[node_id].ok_or(Error {
-        msg: "could not materialize saved forward param",
+        msg: "could not materialize saved forward param for softmax",
         kind: ErrorKind::ParamNotMaterialized,
         ctx: (),
     })?;
-    let node_param = node_params[node_id];
 
     let cols_field = node.shape[node.shape.len() - 1];
     let cols = kernel.raw.def_var(
@@ -324,10 +323,6 @@ pub fn lower_softmax_recursive<'a, B: GpuBackend>(
 
                 kernel.param_store(saved_param, idx, e);
 
-                if let Some(output) = node_param {
-                    kernel.param_store(output, idx, e);
-                }
-
                 kernel.raw.accum_var(local_sum, Op::CopyVar { id: e });
 
                 kernel
@@ -430,10 +425,6 @@ pub fn lower_softmax_recursive<'a, B: GpuBackend>(
                 );
 
                 kernel.param_mul(saved_param, idx, inv_row_sum);
-
-                if let Some(output) = node_param {
-                    kernel.param_mul(output, idx, inv_row_sum);
-                }
 
                 kernel
                     .raw
@@ -665,7 +656,7 @@ pub fn lower_softmax_recursive<'a, B: GpuBackend>(
                     }),
                 );
 
-                let grad = node_param.ok_or(Error {
+                let grad = node_params[node_id].ok_or(Error {
                     msg: "could not materialize grad param in softmax backward",
                     kind: ErrorKind::ParamNotMaterialized,
                     ctx: (),

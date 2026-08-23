@@ -95,10 +95,7 @@ pub fn lower_forward<'a, B: GpuBackend>(
         roots.clear();
 
         for root in roots_clone {
-            std::eprintln!("evaluating root {root:?}");
-
             if resolved.contains(&root) {
-                std::eprintln!("  [already resolved]");
                 continue;
             }
 
@@ -203,7 +200,13 @@ pub fn lower_forward<'a, B: GpuBackend>(
                 Some(Op::LocalId { axis: Axis::X }),
             );
 
-            let out = kernel.raw.def_var(DType::Float, ValueState::Mut, None);
+            let rop = graph.nodes[root].op;
+
+            let out = if rop.is_compute_gid() && !rop.is_leaf() {
+                kernel.raw.def_var(DType::Float, ValueState::Mut, None)
+            } else {
+                ValueId::MAX
+            };
 
             let mut stable_iteration_space = true;
 
@@ -261,8 +264,6 @@ pub fn lower_forward<'a, B: GpuBackend>(
                 val: kernel,
                 dep: Vec::new(),
             });
-
-            std::eprintln!("  done resolved={resolved:?}, produced roots={roots:?}");
         }
     }
 
@@ -300,7 +301,7 @@ fn eval_node<'a, B: GpuBackend>(
     local_col: ValueId,
     shared_size: u32,
     tile_size: ValueId,
-    stable_iteration_space: &mut bool, // need to keep the same iter space throughout compilation
+    stable_iteration_space: &mut bool,
     options: &CompilationOptions<B>,
 ) -> Result<Vec<NodeId>, Error> {
     let node_id = match node_id {
@@ -313,8 +314,6 @@ fn eval_node<'a, B: GpuBackend>(
             });
         }
     };
-
-    std::eprintln!("  resolving {node_id:?}");
 
     kernel.ops.push(&graph.nodes[node_id].op);
 
@@ -371,13 +370,10 @@ fn eval_node<'a, B: GpuBackend>(
                 != Some(Ordering::Less))
                 && least_valid_dispatch != DispatchOptions::Any;
 
-            if !(stable_iter || *stable_iteration_space) || dims_invalid || !computes_gid {
-                std::eprintln!(
-                    "  splitting kernel at iter={:?}, dims={:?}, resolve={:?}",
-                    !(stable_iter || *stable_iteration_space),
-                    dims_invalid,
-                    !(computes_gid || resolved.is_empty())
-                );
+            if (!(stable_iter || *stable_iteration_space) || dims_invalid || !computes_gid) && root != node_id {
+                if !stable_iter {
+                    *stable_iteration_space = false;
+                }
 
                 let param = saved_params[node_id].ok_or(Error {
                     msg: "saved root param not materialized",
@@ -391,6 +387,10 @@ fn eval_node<'a, B: GpuBackend>(
                 kernel.register_param(param);
 
                 return Ok(deepest);
+            }
+
+            if !stable_iter {
+                *stable_iteration_space = false;
             }
 
             let mut deep = lower(
