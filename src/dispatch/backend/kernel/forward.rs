@@ -36,7 +36,7 @@ pub fn lower_forward<'a, B: GpuBackend>(
     let mut params = Vec::new();
 
     params.push(Param {
-        dtype: DType::UnsignedInt,
+        dtype: DType::U32,
         ty: ParamTy::Uniform,
         pid: 0,
     });
@@ -45,10 +45,13 @@ pub fn lower_forward<'a, B: GpuBackend>(
 
     for node_id in 0..graph.nodes.len() {
         if saved[node_id].is_defined_in_forward() {
+            let node = &graph.nodes[node_id];
+
             let pid = params.len();
             saved_params[node_id] = Some(pid);
+
             params.push(Param {
-                dtype: DType::Float,
+                dtype: node.dtype,
                 ty: ParamTy::ReadWrite,
                 pid,
             });
@@ -68,7 +71,7 @@ pub fn lower_forward<'a, B: GpuBackend>(
                     &mut node_params,
                     input,
                     Param {
-                        dtype: DType::Float,
+                        dtype: input_node.dtype,
                         ty: ParamTy::ReadOnly,
                         pid: params.len(),
                     },
@@ -82,7 +85,7 @@ pub fn lower_forward<'a, B: GpuBackend>(
     saved_params[graph.nodes.len() - 1] = Some(output_param);
 
     params.push(Param {
-        dtype: DType::Float,
+        dtype: graph.nodes[graph.nodes.len() - 1].dtype,
         ty: ParamTy::ReadWrite,
         pid: output_param,
     });
@@ -124,7 +127,7 @@ pub fn lower_forward<'a, B: GpuBackend>(
 
             for &meta_index in &root_node.shape {
                 let dim_val = kernel.raw.def_var(
-                    DType::UnsignedInt,
+                    DType::U32,
                     ValueState::Immut,
                     Some(Op::ReadMeta {
                         param: 0,
@@ -138,13 +141,13 @@ pub fn lower_forward<'a, B: GpuBackend>(
             }
 
             let gid = kernel.raw.def_var(
-                DType::UnsignedInt,
+                DType::U32,
                 ValueState::Mut,
                 Some(Op::GlobalId { axis: Axis::X }),
             );
 
             let mut base = kernel.raw.def_var(
-                DType::UnsignedInt,
+                DType::U32,
                 ValueState::Immut,
                 Some(Op::ConstU32 { value: 0 }),
             );
@@ -153,9 +156,7 @@ pub fn lower_forward<'a, B: GpuBackend>(
             kernel.raw.update_var_state(total, ValueState::Mut);
 
             if dims.len() > 1 {
-                let gid2 = kernel
-                    .raw
-                    .def_var(DType::UnsignedInt, ValueState::Mut, None);
+                let gid2 = kernel.raw.def_var(DType::U32, ValueState::Mut, None);
 
                 for (i, &d) in dims.iter().enumerate().skip(1) {
                     kernel.raw.overwrite_var(
@@ -185,25 +186,27 @@ pub fn lower_forward<'a, B: GpuBackend>(
             }
 
             let tile_size = kernel.raw.def_var(
-                DType::UnsignedInt,
+                DType::U32,
                 ValueState::Const,
                 Some(Op::ConstU32 { value: tile_size }),
             );
             let local_row = kernel.raw.def_var(
-                DType::UnsignedInt,
+                DType::U32,
                 ValueState::Immut,
                 Some(Op::LocalId { axis: Axis::Y }),
             );
             let local_col = kernel.raw.def_var(
-                DType::UnsignedInt,
+                DType::U32,
                 ValueState::Immut,
                 Some(Op::LocalId { axis: Axis::X }),
             );
 
-            let rop = graph.nodes[root].op;
+            let root_op = graph.nodes[root].op;
 
-            let out = if rop.is_compute_gid() && !rop.is_leaf() {
-                kernel.raw.def_var(DType::Float, ValueState::Mut, None)
+            let out = if root_op.is_compute_gid() && !root_op.is_leaf() {
+                let root_dtype = graph.nodes[root].dtype;
+
+                kernel.raw.def_var(root_dtype, ValueState::Mut, None)
             } else {
                 ValueId::MAX
             };
@@ -226,6 +229,7 @@ pub fn lower_forward<'a, B: GpuBackend>(
                 local_col,
                 shared_size,
                 tile_size,
+                &params,
                 &mut stable_iteration_space,
                 options,
             )?;
@@ -301,6 +305,7 @@ fn eval_node<'a, B: GpuBackend>(
     local_col: ValueId,
     shared_size: u32,
     tile_size: ValueId,
+    params: &[Param],
     stable_iteration_space: &mut bool,
     options: &CompilationOptions<B>,
 ) -> Result<Vec<NodeId>, Error> {
@@ -343,6 +348,14 @@ fn eval_node<'a, B: GpuBackend>(
             kernel.raw.overwrite_var(out, Op::ConstF32 { value });
         }
 
+        GraphOp::ConstF16(value) => {
+            kernel.raw.overwrite_var(out, Op::ConstF16 { value });
+        }
+
+        GraphOp::ConstBf16(value) => {
+            kernel.raw.overwrite_var(out, Op::ConstBf16 { value });
+        }
+
         GraphOp::Custom {
             lower,
             stable_iter,
@@ -370,7 +383,9 @@ fn eval_node<'a, B: GpuBackend>(
                 != Some(Ordering::Less))
                 && least_valid_dispatch != DispatchOptions::Any;
 
-            if (!(stable_iter || *stable_iteration_space) || dims_invalid || !computes_gid) && root != node_id {
+            if (!(stable_iter || *stable_iteration_space) || dims_invalid || !computes_gid)
+                && root != node_id
+            {
                 if !stable_iter {
                     *stable_iteration_space = false;
                 }
@@ -411,6 +426,7 @@ fn eval_node<'a, B: GpuBackend>(
                 local_col,
                 shared_size,
                 tile_size,
+                params,
                 stable_iteration_space,
                 options,
             )?;

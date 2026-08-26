@@ -1,6 +1,7 @@
-use fused_gpu::dispatch::{
-    CompilationOptions, GpuContext, Schedule, SyncSubmission,
-    backend::{Graph, LossType, Metadata},
+use fused_gpu::{
+    dispatch::{
+        CompilationOptions, GpuContext, Schedule, SyncSubmission, backend::{DType, Graph, LossType, Metadata, OptimType},
+    }, tensor::bf16,
 };
 use gpu_telemetry::monitor::{GpuMonitor, telemetry::Telemetry};
 use std::time::{Duration, Instant};
@@ -69,11 +70,11 @@ fn main() {
     const K: u32 = 512;
     const H: u32 = 256;
 
-    const A_VAL: f32 = 3.0;
-    const B_VAL: f32 = 2.0;
-    const C_VAL: f32 = 1.0;
-    const D_VAL: f32 = 0.5;
-    const E_VAL: f32 = 1.0;
+    const A_VAL: bf16 = bf16::from_f32_const(3.0);
+    const B_VAL: bf16 = bf16::from_f32_const(2.0);
+    const C_VAL: bf16 = bf16::from_f32_const(1.0);
+    const D_VAL: bf16 = bf16::from_f32_const(0.5);
+    const E_VAL: bf16 = bf16::from_f32_const(1.0);
 
     let mut meta = Metadata::new();
     let m = meta.new_field();
@@ -81,14 +82,14 @@ fn main() {
     let k = meta.new_field();
     let h = meta.new_field();
 
-    let mut graph = Graph::new(LossType::MEAN_SQUARED_ERROR);
+    let mut graph = Graph::new(LossType::MEAN_SQUARED_ERROR, OptimType::STOCHASTIC_GRADIENT_DESCENT);
 
     {
-        let a = graph.input(&[m, k]);
-        let b = graph.input(&[k, n]);
-        let c = graph.input(&[h, m]);
-        let d = graph.input(&[n, h]);
-        let e = graph.input(&[h, h]);
+        let a = graph.input(&[m, k], DType::F32);
+        let b = graph.input(&[k, n], DType::F32);
+        let c = graph.input(&[h, m], DType::F32);
+        let d = graph.input(&[n, h], DType::F32);
+        let e = graph.input(&[h, h], DType::F32);
 
         let x = graph.matmul(a, b);
         let y = graph.matmul(c, x);
@@ -115,14 +116,14 @@ fn main() {
     let tensor_start = Instant::now();
 
     let in_tensors = [
-        ctx.new_tensor_init(&[M, K], &[A_VAL; (M * K) as usize]),
-        ctx.new_tensor_init(&[K, N], &[B_VAL; (K * N) as usize]),
-        ctx.new_tensor_init(&[H, M], &[C_VAL; (H * M) as usize]),
-        ctx.new_tensor_init(&[N, H], &[D_VAL; (N * H) as usize]),
-        ctx.new_tensor_init(&[H, H], &[E_VAL; (H * H) as usize]),
+        ctx.init_tensor_bf16(&[M, K], &[A_VAL; (M * K) as usize]),
+        ctx.init_tensor_bf16(&[K, N], &[B_VAL; (K * N) as usize]),
+        ctx.init_tensor_bf16(&[H, M], &[C_VAL; (H * M) as usize]),
+        ctx.init_tensor_bf16(&[N, H], &[D_VAL; (N * H) as usize]),
+        ctx.init_tensor_bf16(&[H, H], &[E_VAL; (H * H) as usize]),
     ];
 
-    let meta_binding = [M, N, K, H];
+    let meta_binding = [briny::raw::cast::reinterpret(1e-3_f32), M, N, K, H];
     assert!(meta.validate_meta(&meta_binding));
 
     let saved_tensors = ctx.alloc_tensors(&graph, &saved, &meta_binding);

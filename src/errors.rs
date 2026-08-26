@@ -91,7 +91,6 @@ pub enum ErrorKind {
     ComputeGraphError,
     FailedBufferCopy,
     UnresolvedRedirection,
-
     SyncError,
     InvalidInterval,
     InvalidEventHandle,
@@ -99,6 +98,7 @@ pub enum ErrorKind {
     FailedAdapterCreation,
     FailedEventCreation,
     FailedInfoQuery,
+    InternalError,
 }
 
 impl Display for ErrorKind {
@@ -125,6 +125,7 @@ impl Display for ErrorKind {
             Self::SyncError => write!(f, "synchronization error"),
             Self::WaitFailed => write!(f, "wait failed"),
             Self::UnresolvedRedirection => write!(f, "unresolved redirection"),
+            Self::InternalError => write!(f, "internal error (maybe report bug)"),
         }
     }
 }

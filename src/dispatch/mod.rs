@@ -6,7 +6,7 @@ use crate::{
         kernel::{Dependencies, RawKernel, Redirect, SaveIndicator},
     },
     errors::Error,
-    tensor::{Tensor, build_dims},
+    tensor::{Tensor, ToBuffer, build_dims},
 };
 use alloc::{vec, vec::Vec};
 use briny::{
@@ -14,6 +14,7 @@ use briny::{
     traits::Pod,
 };
 use core::{fmt::Debug, marker::PhantomData};
+use half::slice::HalfFloatSliceExt;
 
 pub mod backend;
 
@@ -154,7 +155,7 @@ bitflags::bitflags! {
         /// `let mut a = 123;` -> `let a = 123;`
         const UNUSED_MUT = 1 << 8;
 
-        /// Removes copies of immutable variables, replacing their usages directly with the copied variable.
+        /// Removes copies of immutable variables, replacing their usages directly with the original variable.
         ///
         /// `let a = 123; let b = a; let c = b - 1;` -> `let a = 123; let c = a - 1;`
         const COPY_IMMUT = 1 << 9;
@@ -168,6 +169,11 @@ bitflags::bitflags! {
         ///
         /// `let a = 1 + 1 + 1; let b = 1 + 1 + 2;` -> `let two = 1 + 1; let a = two + 1; let b = two + 2;`
         const DUPLICATE_IMMUT = 1 << 11;
+
+        /// Removes needless late intialization of mutable variables.
+        ///
+        /// `let mut a; a = 2;` -> `let mut a = 2;`
+        const LATE_INIT = 1 << 12;
     }
 }
 
@@ -311,6 +317,7 @@ pub struct KernelGroup<'a, B: GpuBackend = backend::GpuContext> {
     pub(crate) forward: Vec<Dependencies<Redirect<(B::Kernel, usize, &'a [bool])>>>,
     pub(crate) backward: Vec<Dependencies<Redirect<(B::Kernel, usize, &'a [bool])>>>,
     pub(crate) loss: B::Kernel,
+    pub(crate) optim: B::Kernel,
 }
 
 /// Handle to a series of GPU submissions.
@@ -478,11 +485,13 @@ impl<B: GpuBackend> GpuContext<B> {
             >>()?;
 
         let loss = self.inner.compile(&ir.loss.raw, &ir.loss.params, options)?;
+        let optim = self.inner.compile(&ir.optim.raw, &ir.optim.params, options)?;
 
         Ok(KernelGroup {
             forward,
             backward,
             loss,
+            optim,
         })
     }
 
@@ -493,9 +502,9 @@ impl<B: GpuBackend> GpuContext<B> {
     /// Failure is platform-specific and backend-dependent. It might only return an error
     /// if buffer lengths are unequal, but its behavior should not be assumed. Errors
     /// must be handled properly in critical code.
-    pub fn download<T: Pod>(&self, tensor: &Tensor<B>, dst: &mut [T]) -> Result<(), Error> {
+    pub fn download<T: Pod, S: ToBuffer<B>>(&self, tensor: &S, dst: &mut [T]) -> Result<(), Error> {
         self.inner
-            .download(&tensor.data.inner, slice_to_bytes_mut(dst))
+            .download(tensor.as_buffer(), slice_to_bytes_mut(dst))
     }
 
     /// Copies the content of a CPU buffer into GPU buffer.
@@ -505,13 +514,13 @@ impl<B: GpuBackend> GpuContext<B> {
     /// Failure is platform-specific and backend-dependent. It might only return an error
     /// if buffer lengths are unequal, but its behavior should not be assumed. Errors
     /// must be handled properly in critical code.
-    pub fn upload<T: Pod>(
+    pub fn upload<T: Pod, S: ToBuffer<B>>(
         &self,
-        tensor: &Tensor<B>,
+        tensor: &S,
         dst: &[T],
     ) -> Result<SubmissionIndex<'_, B>, Error> {
         self.inner
-            .upload(&tensor.data.inner, slice_to_bytes(dst))
+            .upload(tensor.as_buffer(), slice_to_bytes(dst))
             .map(|x| SubmissionIndex(x, self))
     }
 
@@ -546,33 +555,33 @@ impl<B: GpuBackend> GpuContext<B> {
 
         bindings.push(&alloc_tensors.meta);
 
-        for t in &alloc_tensors.forward_saved {
-            bindings.push(&t.data.inner);
-        }
-
+        alloc_tensors
+            .forward_saved
+            .iter()
+            .for_each(|t| bindings.push(t));
         for t in in_tensors {
             bindings.push(&t.data.inner);
         }
 
-        bindings.push(&alloc_tensors.forward_out.data.inner);
+        bindings.push(&alloc_tensors.forward_out);
 
         let forward = self.inner.schedule(&kernels.forward, &bindings, meta)?;
 
         bindings.truncate(1);
 
-        bindings.push(&alloc_tensors.seed.data.inner);
+        bindings.push(&alloc_tensors.seed);
 
-        for t in &alloc_tensors.grad_tensors {
-            bindings.push(&t.data.inner);
-        }
-
+        alloc_tensors
+            .grad_tensors
+            .iter()
+            .for_each(|t| bindings.push(t));
         for t in in_tensors {
             bindings.push(&t.data.inner);
         }
-
-        for t in &alloc_tensors.forward_saved {
-            bindings.push(&t.data.inner);
-        }
+        alloc_tensors
+            .forward_saved
+            .iter()
+            .for_each(|t| bindings.push(t));
 
         let backward = self.inner.schedule(&kernels.backward, &bindings, meta)?;
 
@@ -597,40 +606,49 @@ impl<B: GpuBackend> GpuContext<B> {
         let mut grad_tensors = Vec::new();
 
         for (idx, save) in saved.iter().enumerate() {
-            let node_shape = &graph.nodes[idx].shape;
+            let node = &graph.nodes[idx];
+            let node_shape = &node.shape;
             let num_shape = build_dims(node_shape, meta);
 
+            let len = (num_shape.iter().product::<u32>() as usize) * node.dtype.size();
+
             if save.is_defined_in_forward() {
-                let tensor = self.new_tensor(&num_shape);
-                forward_saved.push(tensor);
+                let buf = self.inner.alloc(len);
+                forward_saved.push(buf);
             }
 
             if save.is_defined_in_backward() {
-                let tensor = self.new_tensor(&num_shape);
-                grad_tensors.push(tensor);
+                let buf = self.inner.alloc(len);
+                grad_tensors.push(buf);
             }
         }
 
         let meta_buffer = self.inner.alloc_meta(meta);
 
         let node_shape = &graph.nodes[graph.nodes.len() - 1].shape;
+        let node_dtype = &graph.nodes[graph.nodes.len() - 1].dtype;
         let shape = build_dims(node_shape, meta);
-        let forward_out = self.new_tensor(&shape);
-        let loss_t = self.new_tensor(&shape);
-        let seed = self.new_tensor(&shape);
+        let len = shape.iter().product::<u32>() as usize * node_dtype.size();
+
+        let forward_out = self.inner.alloc(len);
+        let loss_t = self.inner.alloc(len);
+        let seed = self.inner.alloc(len);
 
         AllocTensors {
             meta: meta_buffer,
             forward_saved,
             grad_tensors,
             forward_out,
-            loss_t,
+            loss_t: Tensor {
+                shape,
+                data: GpuBuffer { inner: loss_t },
+            },
             seed,
         }
     }
 
-    pub fn new_tensor(&self, shape: &[u32]) -> Tensor<B> {
-        let len = shape.iter().product::<u32>() as usize;
+    pub fn new_tensor<const N: u32>(&self, shape: &[u32]) -> Tensor<B> {
+        let len = (shape.iter().product::<u32>() * const { N / 8 }) as usize;
         let data = self.inner.alloc(len);
         Tensor {
             shape: shape.to_vec(),
@@ -638,7 +656,7 @@ impl<B: GpuBackend> GpuContext<B> {
         }
     }
 
-    pub fn new_tensor_init(&self, shape: &[u32], data: &[f32]) -> Tensor<B> {
+    pub fn init_tensor_f32(&self, shape: &[u32], data: &[f32]) -> Tensor<B> {
         debug_assert_eq!(
             shape.iter().product::<u32>(),
             data.len() as u32,
@@ -646,6 +664,38 @@ impl<B: GpuBackend> GpuContext<B> {
         );
 
         let data = gpu_alloc_init(&self.inner, data);
+        Tensor {
+            shape: shape.to_vec(),
+            data,
+        }
+    }
+
+    pub fn init_tensor_f16(&self, shape: &[u32], data: &[half::f16]) -> Tensor<B> {
+        debug_assert_eq!(
+            shape.iter().product::<u32>(),
+            data.len() as u32,
+            "shape product (left) and data length (right) mismatch"
+        );
+
+        let data_u16 = data.reinterpret_cast();
+        let data = gpu_alloc_init(&self.inner, data_u16);
+
+        Tensor {
+            shape: shape.to_vec(),
+            data,
+        }
+    }
+
+    pub fn init_tensor_bf16(&self, shape: &[u32], data: &[half::bf16]) -> Tensor<B> {
+        debug_assert_eq!(
+            shape.iter().product::<u32>(),
+            data.len() as u32,
+            "shape product (left) and data length (right) mismatch"
+        );
+
+        let data_u16 = data.reinterpret_cast();
+        let data = gpu_alloc_init(&self.inner, data_u16);
+
         Tensor {
             shape: shape.to_vec(),
             data,
@@ -698,8 +748,8 @@ impl<B: GpuBackend> Batcher<'_, B> {
         let bindings = [
             &tensors.meta,
             &tensors.loss_t.data.inner,
-            &tensors.seed.data.inner,
-            &tensors.forward_out.data.inner,
+            &tensors.seed,
+            &tensors.forward_out,
             &target.data.inner,
         ];
 
@@ -707,15 +757,35 @@ impl<B: GpuBackend> Batcher<'_, B> {
             .inner
             .dispatch_kernel(&mut self.0, &kernels.loss, grid, &bindings);
     }
+
+    pub fn launch_optim<T: ToBuffer<B>, U: ToBuffer<B>>(
+        &mut self,
+        kernels: &KernelGroup<B>,
+        weight: &T,
+        grad: &U,
+        tensors: &AllocTensors<B>,
+    ) {
+        let grid = tensors.loss_t.calc_grid(*kernels.optim.block());
+
+        let bindings = [
+            &tensors.meta,
+            weight.as_buffer(),
+            grad.as_buffer(),
+        ];
+
+        self.1
+            .inner
+            .dispatch_kernel(&mut self.0, &kernels.optim, grid, &bindings);
+    }
 }
 
 #[derive(Debug)]
 pub struct AllocTensors<B: GpuBackend = backend::GpuContext> {
     pub meta: B::Buffer,
-    pub forward_saved: Vec<Tensor<B>>,
-    pub grad_tensors: Vec<Tensor<B>>,
-    pub forward_out: Tensor<B>,
-    pub loss_t: Tensor<B>,
+    pub forward_saved: Vec<B::Buffer>,
+    pub grad_tensors: Vec<B::Buffer>,
+    pub forward_out: B::Buffer,
+    pub seed: B::Buffer,
 
-    pub seed: Tensor<B>,
+    pub loss_t: Tensor<B>,
 }

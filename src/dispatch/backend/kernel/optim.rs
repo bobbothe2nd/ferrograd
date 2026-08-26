@@ -8,7 +8,7 @@ use crate::{dispatch::{
 use alloc::{vec, vec::Vec};
 
 #[inline]
-pub fn lower_loss<B: GpuBackend>(graph: &Graph<B>, meta: Metadata) -> Result<Kernel, Error> {
+pub fn lower_optim<B: GpuBackend>(graph: &Graph<B>, meta: Metadata) -> Result<Kernel, Error> {
     let root = graph.nodes.len() - 1;
     let root_node = &graph.nodes[root];
     let dtype = root_node.dtype;
@@ -23,7 +23,7 @@ pub fn lower_loss<B: GpuBackend>(graph: &Graph<B>, meta: Metadata) -> Result<Ker
             root,
             iter_space: root_node.shape.clone(),
         },
-        params: Vec::with_capacity(5),
+        params: Vec::with_capacity(3),
         meta: vec![false; meta.fields],
     };
 
@@ -43,7 +43,7 @@ pub fn lower_loss<B: GpuBackend>(graph: &Graph<B>, meta: Metadata) -> Result<Ker
         pid: 0,
     });
 
-    let loss_param = kernel.params.len();
+    let weight_param = kernel.params.len();
     kernel.params.push(Param {
         dtype: dtype,
         ty: ParamTy::ReadWrite,
@@ -55,20 +55,6 @@ pub fn lower_loss<B: GpuBackend>(graph: &Graph<B>, meta: Metadata) -> Result<Ker
         dtype: dtype,
         ty: ParamTy::ReadWrite,
         pid: 2,
-    });
-
-    let pred_param = kernel.params.len();
-    kernel.params.push(Param {
-        dtype: dtype,
-        ty: ParamTy::ReadOnly,
-        pid: 3,
-    });
-
-    let target_param = kernel.params.len();
-    kernel.params.push(Param {
-        dtype: dtype,
-        ty: ParamTy::ReadOnly,
-        pid: 4,
     });
 
     let mut dims = Vec::new();
@@ -127,36 +113,31 @@ pub fn lower_loss<B: GpuBackend>(graph: &Graph<B>, meta: Metadata) -> Result<Ker
         Some(Op::GlobalId { axis: Axis::X }),
     );
 
-    let pred = kernel.raw.def_var(
-        dtype,
+    let lr = kernel.raw.def_var(
+        DType::F32,
         ValueState::Immut,
-        Some(Op::ParamLoad {
-            param: pred_param,
-            index: gid,
-        }),
-    );
-    let target = kernel.raw.def_var(
-        dtype,
-        ValueState::Immut,
-        Some(Op::ParamLoad {
-            param: target_param,
-            index: gid,
+        Some(Op::ReadMeta {
+            param: 0,
+            field: 0,
         }),
     );
 
-    let (loss_val, grad_val) = (graph.loss.lower)(
+    let lr_normalized = match dtype {
+        DType::F16 => kernel.raw.def_var(dtype, ValueState::Immut, Some(Op::CastF16 { id: lr })),
+        DType::BF16 => kernel.raw.def_var(dtype, ValueState::Immut, Some(Op::CastBF16 { id: lr })),
+        _ => lr,
+    };
+
+    (graph.optim.lower)(
         &mut kernel,
         dtype,
-        pred,
-        target,
-        pred_param,
-        target_param,
+        lr_normalized,
+        weight_param,
+        grad_param,
+        gid,
         row,
         col,
     )?;
-
-    kernel.raw.param_store(loss_param, gid, loss_val);
-    kernel.raw.param_store(grad_param, gid, grad_val);
 
     Ok(kernel)
 }

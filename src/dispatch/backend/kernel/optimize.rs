@@ -8,10 +8,36 @@ pub fn optimize<B: GpuBackend>(kernel: &mut RawKernel, options: &CompilationOpti
     for _ in 0..options.opt.passes {
         dead_code_elimination(kernel, options);
 
+        if options.opt.flags.contains(OptFlags::UNUSED_MUT) {
+            for value_id in 0..kernel.values.len() {
+                if kernel.values[value_id].state == ValueState::Mut
+                    && kernel.values[value_id].init.is_some()
+                    && !(0..kernel.ops.len()).any(|statement| {
+                        kernel.ops[statement].does_mutate(value_id)
+                    })
+                {
+                    kernel.values[value_id].state = ValueState::Immut;
+                }
+            }
+        }
+
+        // if options.opt.flags.contains(OptFlags::LOOP_STATELESS) {}
+
+        // if options.opt.flags.contains(OptFlags::REUSE_INLINE) {}
+
+        // if options.opt.flags.contains(OptFlags::OP_ASSIGN) {}
+
+        // if options.opt.flags.contains(OptFlags::EMPTY_SCOPE) {}
+
+        // if options.opt.flags.contains(OptFlags::LATE_INIT) {}
+
         if options.opt.flags.contains(OptFlags::MUL_ADD) {
             for value_id in 0..kernel.values.len() {
                 if kernel.values[value_id].state == ValueState::Masked
-                    || kernel.values[value_id].dtype != DType::Float
+                    || !matches!(
+                        kernel.values[value_id].dtype,
+                        DType::F32 | DType::F16 | DType::BF16
+                    )
                 {
                     continue;
                 }
@@ -38,6 +64,15 @@ pub fn optimize<B: GpuBackend>(kernel: &mut RawKernel, options: &CompilationOpti
             }
 
             let additions = iter_values(kernel, |op, value_id| {
+                if kernel.values[value_id].state == ValueState::Masked
+                    || !matches!(
+                        kernel.values[value_id].dtype,
+                        DType::F32 | DType::F16 | DType::BF16
+                    )
+                {
+                    return None;
+                }
+
                 if let Op::Add { a, b } = &op {
                     Some((*a, *b, value_id))
                 } else {
@@ -66,6 +101,15 @@ pub fn optimize<B: GpuBackend>(kernel: &mut RawKernel, options: &CompilationOpti
 
         if options.opt.flags.contains(OptFlags::DIV_CONST) {
             let divisions = iter_values(kernel, |op, value_id| {
+                if kernel.values[value_id].state == ValueState::Masked
+                    || !matches!(
+                        kernel.values[value_id].dtype,
+                        DType::F32 | DType::F16 | DType::BF16
+                    )
+                {
+                    return None;
+                }
+
                 if let Op::Div { a, b } = &op {
                     Some((*a, *b, value_id))
                 } else {
@@ -108,6 +152,64 @@ pub fn optimize<B: GpuBackend>(kernel: &mut RawKernel, options: &CompilationOpti
             }
         }
 
+        /*
+        must move to smallest scope which encompasses all uses of duplicates and copies
+
+        if options.opt.flags.contains(OptFlags::COPY_IMMUT) {
+            for value_id in 0..kernel.values.len() {
+                if matches!(kernel.values[value_id].state, ValueState::Mut | ValueState::Masked) {
+                    continue;
+                }
+
+                let copy_op = Op::CopyVar { id: value_id };
+
+                let copies = iter_values(&kernel, |op, value_id| {
+                    if op != &copy_op
+                        && kernel.values[value_id].state == ValueState::Mut
+                    {
+                        Some(value_id)
+                    } else {
+                        None
+                    }
+                });
+
+                for copy_id in copies {
+                    if let Some(copy_op) = &mut kernel.values[copy_id].init {
+                        copy_op.replace_usage(copy_id, value_id);
+                    }
+                }
+            }
+        }
+
+        if options.opt.flags.contains(OptFlags::DUPLICATE_IMMUT) {
+            for value_id in 0..kernel.values.len() {
+                if matches!(kernel.values[value_id].state, ValueState::Mut | ValueState::Masked) {
+                    continue;
+                }
+
+                let duplicates = {
+                    let mut previous = Vec::with_capacity(kernel.values.len());
+
+                    iter_values(&kernel, |op, value_id| {
+                        previous.push(*op);
+
+                        if previous.contains(op) {
+                            Some(value_id)
+                        } else {
+                            None
+                        }
+                    })
+                };
+
+                for duplicate in duplicates {
+                    if let Some(duplicate_op) = &mut kernel.values[duplicate].init {
+                        duplicate_op.replace_usage(duplicate, value_id);
+                    }
+                }
+            }
+        }
+        */
+
         kernel.ops = erase_nops(&kernel.ops);
     }
 
@@ -135,12 +237,6 @@ fn iter_values<R>(kernel: &RawKernel, mut f: impl FnMut(&Op, ValueId) -> Option<
     let mut value_ids = Vec::new();
 
     for value_id in 0..kernel.values.len() {
-        if kernel.values[value_id].state == ValueState::Masked
-            || kernel.values[value_id].dtype != DType::Float
-        {
-            continue;
-        }
-
         if let Some(op) = &kernel.values[value_id].init
             && let Some(value) = f(op, value_id)
         {

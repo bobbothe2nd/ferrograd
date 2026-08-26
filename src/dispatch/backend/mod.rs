@@ -197,10 +197,92 @@ pub type ValueId = usize;
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DType {
-    Float,
-    SignedInt,
-    UnsignedInt,
+    F32,
+    F16,
+    BF16,
+    I32,
+    U32,
     Bool,
+}
+
+impl DType {
+    #[inline]
+    #[must_use]
+    pub const fn bits(self) -> usize {
+        match self {
+            Self::Bool => 8,
+            Self::BF16 | Self::F16 => 16,
+            Self::F32 | Self::I32 | Self::U32 => 32,
+        }
+    }
+
+    #[inline]
+    #[must_use]
+    pub const fn size(self) -> usize {
+        match self {
+            Self::Bool => 1,
+            Self::BF16 | Self::F16 => 2,
+            Self::F32 | Self::I32 | Self::U32 => 4,
+        }
+    }
+
+    #[inline]
+    pub fn constant_float(self, value: f32) -> Result<Op, Error> {
+        match self {
+            Self::BF16 => Ok(Op::ConstBf16 {
+                value: half::bf16::from_f32(value),
+            }),
+            Self::F16 => Ok(Op::ConstF16 {
+                value: half::f16::from_f32(value),
+            }),
+            Self::F32 => Ok(Op::ConstF32 { value }),
+            _ => Err(Error {
+                msg: "cannot represent non-float dtype as float constant",
+                kind: ErrorKind::InternalError,
+                ctx: (),
+            }),
+        }
+    }
+
+    #[inline]
+    pub const fn constant_min(self) -> Result<Op, Error> {
+        match self {
+            Self::BF16 => Ok(Op::ConstBf16 {
+                value: half::bf16::MIN,
+            }),
+            Self::F16 => Ok(Op::ConstF16 {
+                value: half::f16::MIN,
+            }),
+            Self::F32 => Ok(Op::ConstF32 { value: f32::MIN }),
+            Self::I32 => Ok(Op::ConstI32 { value: i32::MIN }),
+            Self::U32 => Ok(Op::ConstU32 { value: u32::MIN }),
+            Self::Bool => Err(Error {
+                msg: "cannot represent bool dtype as MIN value",
+                kind: ErrorKind::InternalError,
+                ctx: (),
+            }),
+        }
+    }
+
+    #[inline]
+    pub const fn constant_max(self) -> Result<Op, Error> {
+        match self {
+            Self::BF16 => Ok(Op::ConstBf16 {
+                value: half::bf16::MAX,
+            }),
+            Self::F16 => Ok(Op::ConstF16 {
+                value: half::f16::MAX,
+            }),
+            Self::F32 => Ok(Op::ConstF32 { value: f32::MAX }),
+            Self::I32 => Ok(Op::ConstI32 { value: i32::MAX }),
+            Self::U32 => Ok(Op::ConstU32 { value: u32::MAX }),
+            Self::Bool => Err(Error {
+                msg: "cannot represent bool dtype as MAX value",
+                kind: ErrorKind::InternalError,
+                ctx: (),
+            }),
+        }
+    }
 }
 
 /// Parameter type used in kernel IR.
@@ -279,6 +361,7 @@ pub struct Node<'a, B: GpuBackend = GpuContext> {
     pub inputs: Vec<NodeId>,
     pub outputs: Vec<NodeId>,
     pub shape: Vec<MetaId>,
+    pub dtype: DType,
 }
 
 impl<B: GpuBackend> Clone for Node<'_, B> {
@@ -288,17 +371,18 @@ impl<B: GpuBackend> Clone for Node<'_, B> {
             inputs: self.inputs.clone(),
             outputs: self.outputs.clone(),
             shape: self.shape.clone(),
+            dtype: self.dtype,
         }
     }
 }
 
-#[non_exhaustive]
 #[derive(Debug, Clone, Copy, Hash)]
 pub struct LossType {
     /// Signature:
     /// ```ignore
     /// fn(
     ///     kernel: &mut Kernel,
+    ///     dtype: DType,
     ///     pred: ValueId,
     ///     target: ValueId,
     ///     pred_param: ParamId,
@@ -311,7 +395,25 @@ pub struct LossType {
     /// )
     /// ```
     pub lower:
-        fn(&mut Kernel, ValueId, ValueId, ParamId, ParamId, ValueId, ValueId) -> (ValueId, ValueId),
+        fn(&mut Kernel, DType, ValueId, ValueId, ParamId, ParamId, ValueId, ValueId) -> Result<(ValueId, ValueId), Error>,
+}
+
+#[derive(Debug, Clone, Copy, Hash)]
+pub struct OptimType {
+    /// Signature:
+    /// ```ignore
+    /// fn(
+    ///     kernel: &mut Kernel,
+    ///     lr: ValueId,
+    ///     weights: ParamId,
+    ///     grads: ParamId,
+    ///     gid: ValueId,
+    ///     row: ValueId,
+    ///     col: ValueId,
+    /// )
+    /// ```
+    pub lower:
+        fn(&mut Kernel, DType, ValueId, ParamId, ParamId, ValueId, ValueId, ValueId) -> Result<(), Error>,
 }
 
 #[derive(Debug, Default, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
@@ -323,7 +425,7 @@ impl Metadata {
     /// Defines an empty metadata instance.
     #[must_use]
     pub const fn new() -> Self {
-        Self { fields: 0 }
+        Self { fields: 1 }
     }
 
     /// Defines a new metadata field, returning the identifier.
@@ -348,12 +450,12 @@ impl Metadata {
     /// Valid metadata is defined as:
     ///
     /// - instantiation must be the same length as compile time definition
-    /// - all fields must be multiples of 16 (as of now)
+    /// - all shape fields must be multiples of 16
     ///
     /// If valid, return `true`. If any of the above criteria fail, return `false`.
     #[must_use]
     pub fn validate_meta(&self, meta: &[u32]) -> bool {
-        meta.len() == self.fields && meta.iter().all(|x| x.is_multiple_of(16))
+        meta.len() == self.fields && meta.iter().skip(1).all(|x| x.is_multiple_of(16))
     }
 }
 
@@ -401,7 +503,10 @@ impl PartialOrd for DispatchOptions {
 #[derive(Debug)]
 pub enum GraphOp<'a, B: GpuBackend = GpuContext> {
     Input,
+
     ConstF32(f32),
+    ConstF16(half::f16),
+    ConstBf16(half::bf16),
 
     Custom {
         lower: fn(
@@ -421,6 +526,7 @@ pub enum GraphOp<'a, B: GpuBackend = GpuContext> {
                 ValueId,
                 u32,
                 ValueId,
+                &[Param],
                 &mut bool,
                 &CompilationOptions<B>,
             ) -> Result<Vec<NodeId>, Error>,
@@ -440,6 +546,7 @@ pub enum GraphOp<'a, B: GpuBackend = GpuContext> {
             ValueId,
             u32,
             ValueId,
+            &[Param],
             &mut bool,
             &CompilationOptions<B>,
         ) -> Result<Vec<NodeId>, Error>,
@@ -709,7 +816,7 @@ fn check_shapes<'a, B: GpuBackend>(
                 valid_shape(node_id, node, graph, errors);
             }
 
-            GraphOp::Input | GraphOp::ConstF32(_) => {
+            _ => {
                 if !node.inputs.is_empty() {
                     errors.push(Error {
                         msg: "leaf node accepting inputs",
@@ -730,14 +837,16 @@ fn check_shapes<'a, B: GpuBackend>(
 pub struct Graph<'a, B: GpuBackend = GpuContext> {
     pub(crate) nodes: Vec<Node<'a, B>>,
     pub(crate) loss: LossType,
+    pub(crate) optim: OptimType,
 }
 
 impl<'a, B: GpuBackend> Graph<'a, B> {
     #[must_use]
-    pub const fn new(loss: LossType) -> Self {
+    pub const fn new(loss: LossType, optim: OptimType) -> Self {
         Self {
             nodes: Vec::new(),
             loss,
+            optim,
         }
     }
 
@@ -958,7 +1067,13 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
         KernelsChained::lower(self, meta, saved, options)
     }
 
-    fn add_node(&mut self, op: GraphOp<'a, B>, inputs: Vec<NodeId>, shape: Vec<MetaId>) -> NodeId {
+    fn add_node(
+        &mut self,
+        op: GraphOp<'a, B>,
+        inputs: Vec<NodeId>,
+        shape: Vec<MetaId>,
+        dtype: DType,
+    ) -> NodeId {
         let id = self.nodes.len();
 
         for node_id in &inputs {
@@ -971,17 +1086,18 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
             op,
             inputs,
             shape,
+            dtype,
         });
 
         id
     }
 
-    pub fn input(&mut self, shape: &[MetaId]) -> NodeId {
-        self.add_node(GraphOp::Input, Vec::new(), shape.to_vec())
+    pub fn input(&mut self, shape: &[MetaId], dtype: DType) -> NodeId {
+        self.add_node(GraphOp::Input, Vec::new(), shape.to_vec(), dtype)
     }
 
     pub fn constant_f32(&mut self, data: f32) -> NodeId {
-        self.add_node(GraphOp::ConstF32(data), Vec::new(), Vec::new())
+        self.add_node(GraphOp::ConstF32(data), Vec::new(), Vec::new(), DType::F32)
     }
 
     pub fn repeat<I>(&mut self, count: usize, mut start: I, structure: fn(&mut Self, I) -> I) {

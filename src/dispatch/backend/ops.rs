@@ -43,6 +43,12 @@ pub enum Op {
     ConstF32 {
         value: f32,
     },
+    ConstF16 {
+        value: half::f16,
+    },
+    ConstBf16 {
+        value: half::bf16,
+    },
     ConstU32 {
         value: u32,
     },
@@ -249,6 +255,26 @@ pub enum Op {
         b: ValueId,
     },
 
+    CastF32 {
+        id: ValueId,
+    },
+
+    CastF16 {
+        id: ValueId,
+    },
+
+    CastBF16 {
+        id: ValueId,
+    },
+
+    CastU32 {
+        id: ValueId,
+    },
+
+    CastI32 {
+        id: ValueId,
+    },
+
     Select {
         cond: ValueId,
         a: ValueId,
@@ -273,6 +299,8 @@ pub enum Op {
 
     ElseBegin,
 
+    StartScope,
+
     EndScope,
 
     Barrier,
@@ -288,6 +316,8 @@ impl Op {
             | Self::BlockId { .. }
             | Self::Break
             | Self::ConstF32 { .. }
+            | Self::ConstF16 { .. }
+            | Self::ConstBf16 { .. }
             | Self::ConstI32 { .. }
             | Self::ConstU32 { .. }
             | Self::Continue
@@ -299,15 +329,21 @@ impl Op {
             | Self::LocalId { .. }
             | Self::ReadMeta { .. }
             | Self::Return
-            | Self::Nop => false,
-            Self::CopyVar { id } => id == &value_id,
+            | Self::Nop
+            | Self::StartScope => false,
             Self::Abs { x }
             | Self::Exp { x }
             | Self::Log { x }
             | Self::Neg { x }
             | Self::Sqrt { x }
             | Self::Tanh { x }
-            | Self::Not { cond: x } => x == &value_id,
+            | Self::Not { cond: x }
+            | Self::CopyVar { id: x }
+            | Self::CastF32 { id: x }
+            | Self::CastF16 { id: x }
+            | Self::CastBF16 { id: x }
+            | Self::CastU32 { id: x }
+            | Self::CastI32 { id: x } => x == &value_id,
             Self::Add { a, b }
             | Self::Div { a, b }
             | Self::Eq { a, b }
@@ -355,6 +391,112 @@ impl Op {
         }
     }
 
+    pub const fn replace_usage(&mut self, old_id: ValueId, new_id: ValueId) {
+        const fn replace(value_id: &mut ValueId, old_id: ValueId, new_id: ValueId) {
+            if *value_id == old_id {
+                *value_id = new_id;
+            }
+        }
+
+        match self {
+            Self::CopyVar { id } => replace(id, old_id, new_id),
+            Self::Abs { x }
+            | Self::Exp { x }
+            | Self::Log { x }
+            | Self::Neg { x }
+            | Self::Sqrt { x }
+            | Self::Tanh { x }
+            | Self::Not { cond: x }
+            | Self::CastF32 { id: x }
+            | Self::CastF16 { id: x }
+            | Self::CastBF16 { id: x }
+            | Self::CastU32 { id: x }
+            | Self::CastI32 { id: x } => replace(x, old_id, new_id),
+            Self::Add { a, b }
+            | Self::Div { a, b }
+            | Self::Eq { a, b }
+            | Self::Ge { a, b }
+            | Self::Gt { a, b }
+            | Self::Le { a, b }
+            | Self::Lt { a, b }
+            | Self::Ne { a, b }
+            | Self::Max { a, b }
+            | Self::Min { a, b }
+            | Self::Mod { a, b }
+            | Self::Mul { a, b }
+            | Self::Pow { a, b }
+            | Self::Sub { a, b }
+            | Self::Shl { a, b }
+            | Self::Shr { a, b } => {
+                replace(a, old_id, new_id);
+                replace(b, old_id, new_id);
+            }
+            Self::Fma { a, b, c } => {
+                replace(a, old_id, new_id);
+                replace(b, old_id, new_id);
+                replace(c, old_id, new_id);
+            }
+            Self::AddAssign { val, id }
+            | Self::DivAssign { val, id }
+            | Self::MulAssign { val, id }
+            | Self::ShlAssign { val, id }
+            | Self::ShrAssign { val, id }
+            | Self::SubAssign { val, id }
+            | Self::OverwriteVar { val, id } => {
+                replace(id, old_id, new_id);
+                replace(val, old_id, new_id);
+            }
+            Self::ForLoopBegin { index, end, step } => {
+                replace(index, old_id, new_id);
+                replace(end, old_id, new_id);
+                replace(step, old_id, new_id);
+            }
+            Self::IfBegin { cond } => replace(cond, old_id, new_id),
+            Self::ParamAccum { index, value, .. }
+            | Self::ParamDiv { index, value, .. }
+            | Self::ParamMul { index, value, .. }
+            | Self::ParamShl { index, value, .. }
+            | Self::ParamShr { index, value, .. }
+            | Self::ParamStore { index, value, .. }
+            | Self::ParamSub { index, value, .. }
+            | Self::SharedAccum { index, value, .. }
+            | Self::SharedDiv { index, value, .. }
+            | Self::SharedMul { index, value, .. }
+            | Self::SharedShl { index, value, .. }
+            | Self::SharedShr { index, value, .. }
+            | Self::SharedStore { index, value, .. }
+            | Self::SharedSub { index, value, .. } => {
+                replace(index, old_id, new_id);
+                replace(value, old_id, new_id);
+            }
+            Self::ParamLoad { index, .. } | Self::SharedLoad { index, .. } => replace(index, old_id, new_id),
+            Self::Select { cond, a, b } => {
+                replace(cond, old_id, new_id);
+                replace(a, old_id, new_id);
+                replace(b, old_id, new_id);
+            }
+            Self::Barrier
+            | Self::BlockId { .. }
+            | Self::Break
+            | Self::ConstF32 { .. }
+            | Self::ConstF16 { .. }
+            | Self::ConstBf16 { .. }
+            | Self::ConstI32 { .. }
+            | Self::ConstU32 { .. }
+            | Self::Continue
+            | Self::DefineVar { .. }
+            | Self::ElseBegin
+            | Self::EndScope
+            | Self::ForeverLoopBegin
+            | Self::GlobalId { .. }
+            | Self::LocalId { .. }
+            | Self::ReadMeta { .. }
+            | Self::Return
+            | Self::Nop
+            | Self::StartScope => {}
+        }
+    }
+
     #[must_use]
     pub fn does_write(&self, value_id: ValueId) -> bool {
         match self {
@@ -365,7 +507,8 @@ impl Op {
             | Self::ShlAssign { id, .. }
             | Self::ShrAssign { id, .. }
             | Self::SubAssign { id, .. }
-            | Self::OverwriteVar { id, .. } => id == &value_id,
+            | Self::OverwriteVar { id, .. }
+            | Self::ForLoopBegin { index: id, .. } => id == &value_id,
             _ => false,
         }
     }
@@ -380,8 +523,24 @@ impl Op {
             | Self::ShlAssign { id, .. }
             | Self::ShrAssign { id, .. }
             | Self::SubAssign { id, .. }
-            | Self::OverwriteVar { id, .. } => Some(*id),
+            | Self::OverwriteVar { id, .. }
+            | Self::ForLoopBegin { index: id, .. } => Some(*id),
             _ => None,
+        }
+    }
+
+    #[must_use]
+    pub fn does_mutate(&self, value_id: ValueId) -> bool {
+        match self {
+            Self::AddAssign { id, .. }
+            | Self::DivAssign { id, .. }
+            | Self::MulAssign { id, .. }
+            | Self::ShlAssign { id, .. }
+            | Self::ShrAssign { id, .. }
+            | Self::SubAssign { id, .. }
+            | Self::OverwriteVar { id, .. }
+            | Self::ForLoopBegin { index: id, .. } => id == &value_id,
+            _ => false,
         }
     }
 

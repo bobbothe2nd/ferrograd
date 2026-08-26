@@ -1,6 +1,6 @@
 [package]
 name = "fused_gpu"
-version = "0.1.0-alpha.2"
+version = "0.1.0-alpha.3"
 edition = "2024"
 rust-version = "1.87"
 documentation = "https://docs.rs/fused_gpu"
@@ -44,8 +44,10 @@ required-features = ["std", "wgsl"]
 [dependencies]
 gpu_telemetry = { version = "0.2.0", optional = true }
 pollster = "0.4.0"
-briny = "0.7.0"
+briny = { version = "0.7.1", features = ["half"] }
 bitflags = "2.13.1"
+half = "2"
+num-traits = "0.2.19"
 
 [dev-dependencies]
 gpu_telemetry = "0.2.0"

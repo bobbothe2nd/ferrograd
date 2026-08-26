@@ -51,6 +51,11 @@ pub(crate) fn calc_grid(shape: &[u32], block: [u32; 3]) -> [u32; 3] {
     }
 }
 
+pub trait ToBuffer<B: GpuBackend> {
+    fn to_buffer(self) -> B::Buffer;
+    fn as_buffer(&self) -> &B::Buffer;
+}
+
 /// Core compute storage primitive.
 ///
 /// Actively used in all computations, attaching a shape to the generic (and low-level) [`GpuBuffer`].
@@ -61,6 +66,18 @@ pub(crate) fn calc_grid(shape: &[u32], block: [u32; 3]) -> [u32; 3] {
 pub struct Tensor<B: GpuBackend = crate::dispatch::backend::GpuContext> {
     pub(crate) shape: Vec<u32>,
     pub(crate) data: GpuBuffer<B>,
+}
+
+impl<B: GpuBackend> ToBuffer<B> for Tensor<B> {
+    #[inline]
+    fn to_buffer(self) -> <B as GpuBackend>::Buffer {
+        self.data.inner
+    }
+
+    #[inline]
+    fn as_buffer(&self) -> &<B as GpuBackend>::Buffer {
+        &self.data.inner
+    }
 }
 
 impl<B: GpuBackend> PartialEq for Tensor<B> {
@@ -116,3 +133,5 @@ impl<B: GpuBackend> Tensor<B> {
         self.data.size_bytes() == 0
     }
 }
+
+pub use half::{bf16, f16};

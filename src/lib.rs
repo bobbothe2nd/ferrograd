@@ -4,6 +4,7 @@
 //!
 //! - `wgsl`: Enable WGSL support
 //! - `std`: Enables the standard library (for `fused_gpu`, not the core crate)
+//! - `telemetry`: Cleans `gpu_telemetry` error handling
 //!
 //! You can also use custom backends.
 

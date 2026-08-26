@@ -2,7 +2,8 @@ use crate::{
     dispatch::{
         CompilationOptions, GpuBackend,
         backend::{
-            DType, DispatchOptions, Graph, GraphOp, Node, NodeId, Op, ParamId, ValueId, ValueState,
+            DType, DispatchOptions, Graph, GraphOp, Node, NodeId, Op, Param, ParamId, ValueId,
+            ValueState,
             kernel::{LinkedKernel, NodeInput, SaveIndicator},
         },
     },
@@ -49,6 +50,7 @@ macro_rules! lower_unary {
     };
 
     (
+        $dtype:ident,
         $load_forward:tt,
         $op:expr,
         $back_op:expr,
@@ -70,6 +72,7 @@ macro_rules! lower_unary {
             ValueId,
             u32,
             ValueId,
+            &[Param],
             &mut bool,
             &CompilationOptions<B>,
         ) -> Result<Vec<NodeId>, Error>,
@@ -89,17 +92,19 @@ macro_rules! lower_unary {
         local_col: ValueId,
         shared_size: u32,
         tile_size: ValueId,
+        params: &[Param],
         stable_iteration_space: &mut bool,
         options: &CompilationOptions<B>| {
+            let $dtype = graph.nodes[node_id].dtype;
             let mut deepest;
 
             match backwardness {
                 None => {
                     let node_input = graph.nodes[node_id].inputs[0];
                     let upstream = kernel.raw.def_var(
-                        DType::Float,
+                        $dtype,
                         ValueState::Mut,
-                        Some(Op::ConstF32 { value: 0.0 }),
+                        Some($dtype.constant_float(0.0)?),
                     );
                     deepest = eval_node(
                         root,
@@ -117,12 +122,13 @@ macro_rules! lower_unary {
                         local_col,
                         shared_size,
                         tile_size,
+                        params,
                         stable_iteration_space,
                         options,
                     )?;
 
                     #[allow(unused_variables)]
-                    let save = $op(kernel, out, upstream);
+                    let save = $op(kernel, out, upstream)?;
 
                     $(
                         lower_unary!(
@@ -143,9 +149,9 @@ macro_rules! lower_unary {
                     let node = &graph.nodes[node_id];
 
                     let saved = kernel.raw.def_var(
-                        DType::Float,
+                        $dtype,
                         ValueState::Mut,
-                        Some(Op::ConstF32 { value: 0.0 }),
+                        Some($dtype.constant_float(0.0)?),
                     );
                     deepest = if $load_forward {
                         eval_node(
@@ -171,6 +177,7 @@ macro_rules! lower_unary {
                             local_col,
                             shared_size,
                             tile_size,
+                            params,
                             stable_iteration_space,
                             options,
                         )?
@@ -179,9 +186,9 @@ macro_rules! lower_unary {
                     };
 
                     let acc = kernel.raw.def_var(
-                        DType::Float,
+                        $dtype,
                         ValueState::Mut,
-                        Some(Op::ConstF32 { value: 0.0 }),
+                        Some($dtype.constant_float(0.0)?),
                     );
 
                     let mut back_deepest = eval_node(
@@ -200,13 +207,14 @@ macro_rules! lower_unary {
                         local_col,
                         shared_size,
                         tile_size,
+                        params,
                         stable_iteration_space,
                         options,
                     )?;
 
                     deepest.append(&mut back_deepest);
 
-                    $back_op(kernel, out, saved, acc);
+                    $back_op(kernel, out, saved, acc)?;
                 }
 
                 _ => {
@@ -228,10 +236,13 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
         self.add_node(
             GraphOp::Custom {
                 lower: lower_unary!(
+                    dtype,
                     true,
-                    |kernel: &mut LinkedKernel<'a, B>, out: ValueId, inp: ValueId| kernel
-                        .raw
-                        .overwrite_var(out, Op::Log { x: inp }),
+                    |kernel: &mut LinkedKernel<'a, B>, out: ValueId, inp: ValueId| {
+                        kernel.raw.overwrite_var(out, Op::Log { x: inp });
+
+                        Ok::<(), Error>(())
+                    },
                     |kernel: &mut LinkedKernel<'a, B>,
                      out: ValueId,
                      inp: ValueId,
@@ -243,6 +254,8 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
                                 b: inp,
                             },
                         );
+
+                        Ok::<(), Error>(())
                     },
                 ),
                 display: |inputs| format!("log2({:?})", inputs[0]),
@@ -258,6 +271,7 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
             },
             vec![x],
             self.nodes[x].shape.clone(),
+            self.nodes[x].dtype,
         )
     }
 
@@ -265,26 +279,29 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
         self.add_node(
             GraphOp::Custom {
                 lower: lower_unary!(
+                    dtype,
                     true,
-                    |kernel: &mut LinkedKernel<'a, B>, out: ValueId, inp: ValueId| kernel
-                        .raw
-                        .overwrite_var(out, Op::Tanh { x: inp }),
+                    |kernel: &mut LinkedKernel<'a, B>, out: ValueId, inp: ValueId| {
+                        kernel.raw.overwrite_var(out, Op::Tanh { x: inp });
+
+                        Ok::<(), Error>(())
+                    },
                     |kernel: &mut LinkedKernel<'a, B>,
                      out: ValueId,
                      inp: ValueId,
                      upstream: ValueId| {
                         let one = kernel.raw.def_var(
-                            DType::Float,
+                            dtype,
                             ValueState::Inline,
                             Some(Op::ConstF32 { value: 1.0 }),
                         );
                         let forward_squared = kernel.raw.def_var(
-                            DType::Float,
+                            dtype,
                             ValueState::Inline,
                             Some(Op::Mul { a: inp, b: inp }),
                         );
                         let one_minus_forward_squared = kernel.raw.def_var(
-                            DType::Float,
+                            dtype,
                             ValueState::Inline,
                             Some(Op::Sub {
                                 a: one,
@@ -298,6 +315,8 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
                                 b: one_minus_forward_squared,
                             },
                         );
+
+                        Ok::<(), Error>(())
                     },
                 ),
                 display: |inputs| format!("tanh({:?})", inputs[0]),
@@ -313,6 +332,7 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
             },
             vec![x],
             self.nodes[x].shape.clone(),
+            self.nodes[x].dtype,
         )
     }
 
@@ -320,26 +340,26 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
         self.add_node(
             GraphOp::Custom {
                 lower: lower_unary!(
+                    dtype,
                     true,
                     |kernel: &mut LinkedKernel<'a, B>, out: ValueId, inp: ValueId| {
                         let zero = kernel.raw.def_var(
-                            DType::Float,
+                            dtype,
                             ValueState::Inline,
-                            Some(Op::ConstF32 { value: 0.0 }),
+                            Some(dtype.constant_float(0.0)?),
                         );
                         let one = kernel.raw.def_var(
-                            DType::Float,
+                            dtype,
                             ValueState::Inline,
                             Some(Op::ConstF32 { value: 1.0 }),
                         );
 
-                        let exp_inp = kernel.raw.def_var(
-                            DType::Float,
-                            ValueState::Inline,
-                            Some(Op::Exp { x: inp }),
-                        );
+                        let exp_inp =
+                            kernel
+                                .raw
+                                .def_var(dtype, ValueState::Inline, Some(Op::Exp { x: inp }));
                         let exp_inp_minus_one = kernel.raw.def_var(
-                            DType::Float,
+                            dtype,
                             ValueState::Inline,
                             Some(Op::Sub { a: exp_inp, b: one }),
                         );
@@ -357,29 +377,31 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
                                 b: exp_inp_minus_one,
                             },
                         );
+
+                        Ok::<(), Error>(())
                     },
                     |kernel: &mut LinkedKernel<'a, B>,
                      out: ValueId,
                      inp: ValueId,
                      upstream: ValueId| {
                         let zero = kernel.raw.def_var(
-                            DType::Float,
+                            dtype,
                             ValueState::Inline,
-                            Some(Op::ConstF32 { value: 0.0 }),
+                            Some(dtype.constant_float(0.0)?),
                         );
                         let one = kernel.raw.def_var(
-                            DType::Float,
+                            dtype,
                             ValueState::Inline,
                             Some(Op::ConstF32 { value: 1.0 }),
                         );
 
                         let forward_plus_one = kernel.raw.def_var(
-                            DType::Float,
+                            dtype,
                             ValueState::Inline,
                             Some(Op::Add { a: inp, b: one }),
                         );
                         let upstream_forward_plus_one = kernel.raw.def_var(
-                            DType::Float,
+                            dtype,
                             ValueState::Inline,
                             Some(Op::Mul {
                                 a: upstream,
@@ -400,6 +422,8 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
                                 b: upstream_forward_plus_one,
                             },
                         );
+
+                        Ok::<(), Error>(())
                     },
                 ),
                 display: |inputs| format!("ELU({:?})", inputs[0]),
@@ -415,6 +439,7 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
             },
             vec![x],
             self.nodes[x].shape.clone(),
+            self.nodes[x].dtype,
         )
     }
 
@@ -422,24 +447,27 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
         self.add_node(
             GraphOp::Custom {
                 lower: lower_unary!(
+                    dtype,
                     true,
                     |kernel: &mut LinkedKernel<'a, B>, out: ValueId, inp: ValueId| {
                         let zero = kernel.raw.def_var(
-                            DType::Float,
+                            dtype,
                             ValueState::Inline,
-                            Some(Op::ConstF32 { value: 0.0 }),
+                            Some(dtype.constant_float(0.0)?),
                         );
 
                         kernel.raw.overwrite_var(out, Op::Max { a: inp, b: zero });
+
+                        Ok::<(), Error>(())
                     },
                     |kernel: &mut LinkedKernel<'a, B>,
                      out: ValueId,
                      inp: ValueId,
                      upstream: ValueId| {
                         let zero = kernel.raw.def_var(
-                            DType::Float,
+                            dtype,
                             ValueState::Inline,
-                            Some(Op::ConstF32 { value: 0.0 }),
+                            Some(dtype.constant_float(0.0)?),
                         );
 
                         let cond = kernel.raw.def_var(
@@ -448,10 +476,12 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
                             Some(Op::Ge { a: inp, b: zero }),
                         );
 
-                        let _ = kernel.push_if(cond, |kernel| {
+                        kernel.push_if(cond, |kernel| {
                             kernel.raw.accum_var(out, Op::CopyVar { id: upstream });
                             Ok(())
-                        });
+                        })?;
+
+                        Ok::<(), Error>(())
                     },
                 ),
                 display: |inputs| format!("ReLU({:?})", inputs[0]),
@@ -467,6 +497,7 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
             },
             vec![x],
             self.nodes[x].shape.clone(),
+            self.nodes[x].dtype,
         )
     }
 
@@ -477,59 +508,60 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
         self.add_node(
             GraphOp::Custom {
                 lower: lower_unary!(
+                    dtype,
                     true,
                     |kernel: &mut LinkedKernel<'a, B>, out: ValueId, inp: ValueId| {
                         let gelu_a = kernel.raw.def_var(
-                            DType::Float,
+                            dtype,
                             ValueState::Inline,
                             Some(Op::ConstF32 {
                                 value: THAT_RANDOM_DECIMAL,
                             }),
                         );
                         let gelu_b = kernel.raw.def_var(
-                            DType::Float,
+                            dtype,
                             ValueState::Inline,
                             Some(Op::ConstF32 {
                                 value: SQRT_FRAC_PI_2,
                             }),
                         );
                         let half = kernel.raw.def_var(
-                            DType::Float,
+                            dtype,
                             ValueState::Inline,
                             Some(Op::ConstF32 { value: 0.5 }),
                         );
                         let one = kernel.raw.def_var(
-                            DType::Float,
+                            dtype,
                             ValueState::Inline,
                             Some(Op::ConstF32 { value: 1.0 }),
                         );
 
                         let xx = kernel.raw.def_var(
-                            DType::Float,
+                            dtype,
                             ValueState::Inline,
                             Some(Op::Mul { a: inp, b: inp }),
                         );
 
                         let xxx = kernel.raw.def_var(
-                            DType::Float,
+                            dtype,
                             ValueState::Inline,
                             Some(Op::Mul { a: xx, b: inp }),
                         );
 
                         let a_x3 = kernel.raw.def_var(
-                            DType::Float,
+                            dtype,
                             ValueState::Inline,
                             Some(Op::Mul { a: xxx, b: gelu_a }),
                         );
 
                         let x_plus_a_x3 = kernel.raw.def_var(
-                            DType::Float,
+                            dtype,
                             ValueState::Inline,
                             Some(Op::Add { a: inp, b: a_x3 }),
                         );
 
                         let b_x_plus_a_x3 = kernel.raw.def_var(
-                            DType::Float,
+                            dtype,
                             ValueState::Inline,
                             Some(Op::Mul {
                                 a: gelu_b,
@@ -538,19 +570,19 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
                         );
 
                         let tanh_u = kernel.raw.def_var(
-                            DType::Float,
+                            dtype,
                             ValueState::Inline,
                             Some(Op::Tanh { x: b_x_plus_a_x3 }),
                         );
 
                         let one_plus_tanh_u = kernel.raw.def_var(
-                            DType::Float,
+                            dtype,
                             ValueState::Inline,
                             Some(Op::Add { a: one, b: tanh_u }),
                         );
 
                         let half_x = kernel.raw.def_var(
-                            DType::Float,
+                            dtype,
                             ValueState::Inline,
                             Some(Op::Mul { a: half, b: inp }),
                         );
@@ -563,43 +595,43 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
                             },
                         );
 
-                        tanh_u
+                        Ok::<ValueId, Error>(tanh_u)
                     },
                     |kernel: &mut LinkedKernel<'a, B>,
                      out: ValueId,
                      inp: ValueId,
                      upstream: ValueId| {
                         let half = kernel.raw.def_var(
-                            DType::Float,
+                            dtype,
                             ValueState::Inline,
                             Some(Op::ConstF32 { value: 0.5 }),
                         );
                         let one = kernel.raw.def_var(
-                            DType::Float,
+                            dtype,
                             ValueState::Inline,
                             Some(Op::ConstF32 { value: 1.0 }),
                         );
                         let three = kernel.raw.def_var(
-                            DType::Float,
+                            dtype,
                             ValueState::Inline,
                             Some(Op::ConstF32 { value: 3.0 }),
                         );
                         let gelu_a = kernel.raw.def_var(
-                            DType::Float,
+                            dtype,
                             ValueState::Inline,
                             Some(Op::ConstF32 {
                                 value: THAT_RANDOM_DECIMAL,
                             }),
                         );
                         let gelu_b = kernel.raw.def_var(
-                            DType::Float,
+                            dtype,
                             ValueState::Inline,
                             Some(Op::ConstF32 {
                                 value: SQRT_FRAC_PI_2,
                             }),
                         );
                         let gelu_c = kernel.raw.def_var(
-                            DType::Float,
+                            dtype,
                             ValueState::Const,
                             Some(Op::Mul {
                                 a: gelu_a,
@@ -608,43 +640,43 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
                         );
 
                         let xx = kernel.raw.def_var(
-                            DType::Float,
+                            dtype,
                             ValueState::Inline,
                             Some(Op::Mul { a: inp, b: inp }),
                         );
 
                         let one_plus_t = kernel.raw.def_var(
-                            DType::Float,
+                            dtype,
                             ValueState::Immut,
                             Some(Op::Add { a: one, b: inp }),
                         );
 
                         let tt = kernel.raw.def_var(
-                            DType::Float,
+                            dtype,
                             ValueState::Inline,
                             Some(Op::Mul { a: inp, b: inp }),
                         );
 
                         let one_minus_tt = kernel.raw.def_var(
-                            DType::Float,
+                            dtype,
                             ValueState::Immut,
                             Some(Op::Sub { a: one, b: tt }),
                         );
 
                         let c_xx = kernel.raw.def_var(
-                            DType::Float,
+                            dtype,
                             ValueState::Inline,
                             Some(Op::Mul { a: gelu_c, b: xx }),
                         );
 
                         let one_plus_c_xx = kernel.raw.def_var(
-                            DType::Float,
+                            dtype,
                             ValueState::Inline,
                             Some(Op::Add { a: one, b: c_xx }),
                         );
 
                         let du_dx = kernel.raw.def_var(
-                            DType::Float,
+                            dtype,
                             ValueState::Immut,
                             Some(Op::Mul {
                                 a: gelu_b,
@@ -653,13 +685,13 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
                         );
 
                         let x_du_dx = kernel.raw.def_var(
-                            DType::Float,
+                            dtype,
                             ValueState::Immut,
                             Some(Op::Mul { a: inp, b: du_dx }),
                         );
 
                         let one_minus_tt_x_du_dx = kernel.raw.def_var(
-                            DType::Float,
+                            dtype,
                             ValueState::Immut,
                             Some(Op::Mul {
                                 a: one_minus_tt,
@@ -668,7 +700,7 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
                         );
 
                         let two_dy_dx = kernel.raw.def_var(
-                            DType::Float,
+                            dtype,
                             ValueState::Immut,
                             Some(Op::Add {
                                 a: one_plus_t,
@@ -677,7 +709,7 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
                         );
 
                         let dy_dx = kernel.raw.def_var(
-                            DType::Float,
+                            dtype,
                             ValueState::Immut,
                             Some(Op::Mul {
                                 a: half,
@@ -692,6 +724,8 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
                                 b: dy_dx,
                             },
                         );
+
+                        Ok::<(), Error>(())
                     },
                     0
                 ),
@@ -708,6 +742,7 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
             },
             vec![x],
             self.nodes[x].shape.clone(),
+            self.nodes[x].dtype,
         )
     }
 
@@ -715,10 +750,13 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
         self.add_node(
             GraphOp::Custom {
                 lower: lower_unary!(
+                    dtype,
                     true,
-                    |kernel: &mut LinkedKernel<'a, B>, out: ValueId, inp: ValueId| kernel
-                        .raw
-                        .overwrite_var(out, Op::Exp { x: inp }),
+                    |kernel: &mut LinkedKernel<'a, B>, out: ValueId, inp: ValueId| {
+                        kernel.raw.overwrite_var(out, Op::Exp { x: inp });
+
+                        Ok::<(), Error>(())
+                    },
                     |kernel: &mut LinkedKernel<'a, B>,
                      out: ValueId,
                      inp: ValueId,
@@ -730,6 +768,8 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
                                 b: inp,
                             },
                         );
+
+                        Ok::<(), Error>(())
                     },
                 ),
                 display: |inputs| format!("e^{:?}", inputs[0]),
@@ -745,6 +785,7 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
             },
             vec![x],
             self.nodes[x].shape.clone(),
+            self.nodes[x].dtype,
         )
     }
 
@@ -752,30 +793,33 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
         self.add_node(
             GraphOp::Custom {
                 lower: lower_unary!(
+                    dtype,
                     true,
-                    |kernel: &mut LinkedKernel<'a, B>, out: ValueId, inp: ValueId| kernel
-                        .raw
-                        .overwrite_var(out, Op::Abs { x: inp }),
+                    |kernel: &mut LinkedKernel<'a, B>, out: ValueId, inp: ValueId| {
+                        kernel.raw.overwrite_var(out, Op::Abs { x: inp });
+
+                        Ok::<(), Error>(())
+                    },
                     |kernel: &mut LinkedKernel<'a, B>,
                      out: ValueId,
                      inp: ValueId,
                      upstream: ValueId| {
                         let zero = kernel.raw.def_var(
-                            DType::Float,
+                            dtype,
                             ValueState::Inline,
-                            Some(Op::ConstF32 { value: 0.0 }),
+                            Some(dtype.constant_float(0.0)?),
                         );
                         let ge0 = kernel.raw.def_var(
-                            DType::Float,
+                            dtype,
                             ValueState::Inline,
                             Some(Op::Ge { a: inp, b: zero }),
                         );
                         let le0 = kernel.raw.def_var(
-                            DType::Float,
+                            dtype,
                             ValueState::Inline,
                             Some(Op::Ge { a: inp, b: zero }),
                         );
-                        let _ = kernel.push_if_else(
+                        kernel.push_if_else(
                             ge0,
                             |kernel| {
                                 kernel.raw.accum_var(out, Op::CopyVar { id: upstream });
@@ -789,13 +833,15 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
                                         Ok(())
                                     },
                                     |kernel: &mut LinkedKernel<'a, B>| {
-                                        kernel.raw.accum_var(out, Op::ConstF32 { value: 0.0 });
+                                        kernel.raw.accum_var(out, dtype.constant_float(0.0)?);
                                         Ok(())
                                     },
                                 )?;
                                 Ok(())
                             },
-                        );
+                        )?;
+
+                        Ok::<(), Error>(())
                     },
                 ),
                 display: |inputs| format!("|{:?}|", inputs[0]),
@@ -811,6 +857,7 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
             },
             vec![x],
             self.nodes[x].shape.clone(),
+            self.nodes[x].dtype,
         )
     }
 
@@ -818,16 +865,21 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
         self.add_node(
             GraphOp::Custom {
                 lower: lower_unary!(
+                    dtype,
                     false,
-                    |kernel: &mut LinkedKernel<'a, B>, out: ValueId, inp: ValueId| kernel
-                        .raw
-                        .overwrite_var(out, Op::Neg { x: inp }),
+                    |kernel: &mut LinkedKernel<'a, B>, out: ValueId, inp: ValueId| {
+                        kernel.raw.overwrite_var(out, Op::Neg { x: inp });
+
+                        Ok::<(), Error>(())
+                    },
                     |kernel: &mut LinkedKernel<'a, B>,
                      out: ValueId,
                      _: ValueId,
-                     upstream: ValueId| kernel
-                        .raw
-                        .accum_var(out, Op::Neg { x: upstream }),
+                     upstream: ValueId| {
+                        kernel.raw.accum_var(out, Op::Neg { x: upstream });
+
+                        Ok::<(), Error>(())
+                    },
                 ),
                 display: |inputs| format!("-{:?}", inputs[0]),
                 save: |_node_id, node, graph, saved| {
@@ -849,6 +901,7 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
             },
             vec![x],
             self.nodes[x].shape.clone(),
+            self.nodes[x].dtype,
         )
     }
 }

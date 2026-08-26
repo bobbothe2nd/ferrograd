@@ -16,14 +16,17 @@ mod backward;
 
 mod loss;
 
+mod optim;
+
 mod optimize;
 
-/// Forward, backward, and loss kernel IR.
+/// Forward, backward, loss, and optim kernel IR.
 #[derive(Debug)]
 pub struct KernelGroup<'a, B: GpuBackend = GpuContext> {
     pub(crate) forward: KernelsRedirected<'a, B>,
     pub(crate) backward: KernelsRedirected<'a, B>,
     pub(crate) loss: Kernel,
+    pub(crate) optim: Kernel,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -198,7 +201,8 @@ impl<'a> KernelsChained<'a> {
 
         let forward = forward::lower_forward(graph, meta, saved, options)?;
         let backward = backward::lower_backward(graph, meta, saved, options)?;
-        let mut loss = loss::lower_loss(graph, meta);
+        let mut loss = loss::lower_loss(graph, meta)?;
+        let mut optim = optim::lower_optim(graph, meta)?;
 
         let mut forward = eliminate_kernels(forward);
         let mut backward = eliminate_kernels(backward);
@@ -216,11 +220,13 @@ impl<'a> KernelsChained<'a> {
         }
 
         optimize::optimize(&mut loss.raw, options);
+        optimize::optimize(&mut optim.raw, options);
 
         Ok(KernelGroup {
             forward,
             backward,
             loss,
+            optim,
         })
     }
 }

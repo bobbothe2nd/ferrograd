@@ -2,68 +2,68 @@ use crate::dispatch::backend::{DType, LossType, Op, ValueState};
 
 impl LossType {
     pub const MEAN_SQUARED_ERROR: Self = Self {
-        lower: |kernel, pred, target, _, _, _, _| {
+        lower: |kernel, dtype, pred, target, _, _, _, _| {
             let diff = kernel.raw.def_var(
-                DType::Float,
+                dtype,
                 ValueState::Immut,
                 Some(Op::Sub { a: pred, b: target }),
             );
 
             let loss_val = kernel.raw.def_var(
-                DType::Float,
+                dtype,
                 ValueState::Immut,
                 Some(Op::Mul { a: diff, b: diff }),
             );
 
             let two = kernel.raw.def_var(
-                DType::Float,
+                dtype,
                 ValueState::Inline,
-                Some(Op::ConstF32 { value: 2.0 }),
+                Some(dtype.constant_float(2.0)?),
             );
 
             let grad_val = kernel.raw.def_var(
-                DType::Float,
+                dtype,
                 ValueState::Immut,
                 Some(Op::Mul { a: two, b: diff }),
             );
 
-            (loss_val, grad_val)
+            Ok((loss_val, grad_val))
         },
     };
 
     pub const BINARY_CROSS_ENTROPY: Self = Self {
-        lower: |kernel, pred, target, _, _, _, _| {
+        lower: |kernel, dtype, pred, target, _, _, _, _| {
             let one = kernel.raw.def_var(
-                DType::Float,
+                dtype,
                 ValueState::Inline,
-                Some(Op::ConstF32 { value: 1.0 }),
+                Some(dtype.constant_float(1.0)?),
             );
 
             let log_pred =
                 kernel
                     .raw
-                    .def_var(DType::Float, ValueState::Immut, Some(Op::Log { x: pred }));
+                    .def_var(dtype, ValueState::Immut, Some(Op::Log { x: pred }));
 
             let one_minus_target = kernel.raw.def_var(
-                DType::Float,
+                dtype,
                 ValueState::Immut,
                 Some(Op::Sub { a: one, b: target }),
             );
 
             let one_minus_pred = kernel.raw.def_var(
-                DType::Float,
+                dtype,
                 ValueState::Immut,
                 Some(Op::Sub { a: one, b: target }),
             );
 
             let log_one_minus_pred = kernel.raw.def_var(
-                DType::Float,
+                dtype,
                 ValueState::Immut,
                 Some(Op::Log { x: one_minus_pred }),
             );
 
             let term1 = kernel.raw.def_var(
-                DType::Float,
+                dtype,
                 ValueState::Immut,
                 Some(Op::Mul {
                     a: target,
@@ -72,7 +72,7 @@ impl LossType {
             );
 
             let term2 = kernel.raw.def_var(
-                DType::Float,
+                dtype,
                 ValueState::Immut,
                 Some(Op::Mul {
                     a: one_minus_target,
@@ -81,25 +81,25 @@ impl LossType {
             );
 
             let loss_val = kernel.raw.def_var(
-                DType::Float,
+                dtype,
                 ValueState::Immut,
                 Some(Op::Sub { a: term2, b: term1 }),
             );
 
             let grad_val = kernel.raw.def_var(
-                DType::Float,
+                dtype,
                 ValueState::Immut,
                 Some(Op::Sub { a: pred, b: target }),
             );
 
-            (loss_val, grad_val)
+            Ok((loss_val, grad_val))
         },
     };
 
     pub const CROSS_ENTROPY: Self = Self {
-        lower: |kernel, pred, target, _, target_param, row, col| {
-            kernel.update_param_dtype(target_param, DType::UnsignedInt);
-            kernel.raw.update_var_dtype(target, DType::UnsignedInt);
+        lower: |kernel, dtype, pred, target, _, target_param, row, col| {
+            kernel.update_param_dtype(target_param, DType::U32);
+            kernel.raw.update_var_dtype(target, DType::U32);
             kernel.raw.update_var_init(
                 target,
                 Op::ParamLoad {
@@ -115,26 +115,25 @@ impl LossType {
             );
 
             let loss_val = kernel.raw.def_var(
-                DType::Float,
+                dtype,
                 ValueState::Mut,
-                Some(Op::ConstF32 { value: 0.0 }),
+                Some(dtype.constant_float(0.0)?),
             );
 
-            let grad_val = kernel.raw.def_var(
-                DType::Float,
-                ValueState::Mut,
-                Some(Op::CopyVar { id: pred }),
-            );
+            let grad_val =
+                kernel
+                    .raw
+                    .def_var(dtype, ValueState::Mut, Some(Op::CopyVar { id: pred }));
 
             let _ = kernel.raw.push_if(target_eq_col, |kernel| {
                 let one = kernel.def_var(
-                    DType::Float,
+                    dtype,
                     ValueState::Inline,
-                    Some(Op::ConstF32 { value: 1.0 }),
+                    Some(dtype.constant_float(1.0)?),
                 );
 
                 let log_pred =
-                    kernel.def_var(DType::Float, ValueState::Inline, Some(Op::Log { x: pred }));
+                    kernel.def_var(dtype, ValueState::Inline, Some(Op::Log { x: pred }));
 
                 kernel.overwrite_var(loss_val, Op::Neg { x: log_pred });
 
@@ -143,7 +142,7 @@ impl LossType {
                 Ok(())
             });
 
-            (loss_val, grad_val)
+            Ok((loss_val, grad_val))
         },
     };
 }

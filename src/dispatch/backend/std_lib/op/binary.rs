@@ -2,8 +2,8 @@ use crate::{
     dispatch::{
         GpuBackend,
         backend::{
-            CompilationOptions, DType, DispatchOptions, Graph, GraphOp, MetaId, Node, NodeId,
-            NodeInput, Op, ParamId, ValueId, ValueState,
+            CompilationOptions, DispatchOptions, Graph, GraphOp, MetaId, Node, NodeId, NodeInput,
+            Op, Param, ParamId, ValueId, ValueState,
             kernel::{LinkedKernel, SaveIndicator},
         },
     },
@@ -96,6 +96,7 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
                     ValueId,
                     u32,
                     ValueId,
+                    &[Param],
                     &mut bool,
                     &CompilationOptions<B>,
                 ) -> Result<Vec<NodeId>, Error>,
@@ -115,16 +116,18 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
                         local_col: ValueId,
                         shared_size: u32,
                         tile_size: ValueId,
+                        params: &[Param],
                         stable_iteration_space: &mut bool,
                         options: &CompilationOptions<B>| {
                     let mut deepest = Vec::new();
+                    let dtype = graph.nodes[node_id].dtype;
 
                     match backwardness {
                         None => {
                             let a = graph.nodes[node_id].inputs[0];
                             let b = graph.nodes[node_id].inputs[1];
 
-                            let a_val = kernel.raw.def_var(DType::Float, ValueState::Mut, None);
+                            let a_val = kernel.raw.def_var(dtype, ValueState::Mut, None);
 
                             let mut a_deep = eval_node(
                                 root,
@@ -142,11 +145,12 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
                                 local_col,
                                 shared_size,
                                 tile_size,
+                                params,
                                 stable_iteration_space,
                                 options,
                             )?;
 
-                            let b_val = kernel.raw.def_var(DType::Float, ValueState::Mut, None);
+                            let b_val = kernel.raw.def_var(dtype, ValueState::Mut, None);
 
                             let mut b_deep = eval_node(
                                 root,
@@ -164,6 +168,7 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
                                 local_col,
                                 shared_size,
                                 tile_size,
+                                params,
                                 stable_iteration_space,
                                 options,
                             )?;
@@ -193,6 +198,7 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
                                 local_col,
                                 shared_size,
                                 tile_size,
+                                params,
                                 stable_iteration_space,
                                 options,
                             )?;
@@ -224,6 +230,7 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
             },
             vec![a, b],
             get_shape(a, b, self),
+            self.nodes[a].dtype,
         )
     }
 
@@ -246,6 +253,7 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
                     ValueId,
                     u32,
                     ValueId,
+                    &[Param],
                     &mut bool,
                     &CompilationOptions<B>,
                 ) -> Result<Vec<NodeId>, Error>,
@@ -265,16 +273,18 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
                         local_col: ValueId,
                         shared_size: u32,
                         tile_size: ValueId,
+                        params: &[Param],
                         stable_iteration_space: &mut bool,
                         options: &CompilationOptions<B>| {
                     let mut deepest = Vec::new();
+                    let dtype = graph.nodes[node_id].dtype;
 
                     match backwardness {
                         None => {
                             let a = graph.nodes[node_id].inputs[0];
                             let b = graph.nodes[node_id].inputs[1];
 
-                            let a_val = kernel.raw.def_var(DType::Float, ValueState::Mut, None);
+                            let a_val = kernel.raw.def_var(dtype, ValueState::Mut, None);
 
                             let mut a_deep = eval_node(
                                 root,
@@ -292,11 +302,12 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
                                 local_col,
                                 shared_size,
                                 tile_size,
+                                params,
                                 stable_iteration_space,
                                 options,
                             )?;
 
-                            let b_val = kernel.raw.def_var(DType::Float, ValueState::Mut, None);
+                            let b_val = kernel.raw.def_var(dtype, ValueState::Mut, None);
 
                             let mut b_deep = eval_node(
                                 root,
@@ -314,6 +325,7 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
                                 local_col,
                                 shared_size,
                                 tile_size,
+                                params,
                                 stable_iteration_space,
                                 options,
                             )?;
@@ -328,9 +340,9 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
 
                         Some(0) => {
                             let g_val = kernel.raw.def_var(
-                                DType::Float,
+                                dtype,
                                 ValueState::Mut,
-                                Some(Op::ConstF32 { value: 0.0 }),
+                                Some(dtype.constant_float(0.0)?),
                             );
 
                             let mut deep = eval_node(
@@ -349,13 +361,15 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
                                 local_col,
                                 shared_size,
                                 tile_size,
+                                params,
                                 stable_iteration_space,
                                 options,
                             )?;
 
                             let user = graph.nodes[node_id].inputs[1];
 
-                            let saved = read_saved(kernel, idx, saved_params[user]);
+                            let saved =
+                                read_saved(kernel, idx, saved_params[user], graph, user, params)?;
 
                             kernel.raw.accum_var(out, Op::Mul { a: g_val, b: saved });
 
@@ -364,9 +378,9 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
 
                         Some(1) => {
                             let g_val = kernel.raw.def_var(
-                                DType::Float,
+                                dtype,
                                 ValueState::Mut,
-                                Some(Op::ConstF32 { value: 0.0 }),
+                                Some(dtype.constant_float(0.0)?),
                             );
 
                             let mut deep = eval_node(
@@ -385,13 +399,15 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
                                 local_col,
                                 shared_size,
                                 tile_size,
+                                params,
                                 stable_iteration_space,
                                 options,
                             )?;
 
                             let user = graph.nodes[node_id].inputs[0];
 
-                            let saved = read_saved(kernel, idx, saved_params[user]);
+                            let saved =
+                                read_saved(kernel, idx, saved_params[user], graph, user, params)?;
 
                             kernel.raw.accum_var(out, Op::Mul { a: g_val, b: saved });
 
@@ -422,6 +438,7 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
             },
             vec![a, b],
             get_shape(a, b, self),
+            self.nodes[a].dtype,
         )
     }
 
@@ -444,6 +461,7 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
                     ValueId,
                     u32,
                     ValueId,
+                    &[Param],
                     &mut bool,
                     &CompilationOptions<B>,
                 ) -> Result<Vec<NodeId>, Error>,
@@ -463,16 +481,18 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
                         local_col: ValueId,
                         shared_size: u32,
                         tile_size: ValueId,
+                        params: &[Param],
                         stable_iteration_space: &mut bool,
                         options: &CompilationOptions<B>| {
                     let mut deepest = Vec::new();
+                    let dtype = graph.nodes[node_id].dtype;
 
                     match backwardness {
                         None => {
                             let a = graph.nodes[node_id].inputs[0];
                             let b = graph.nodes[node_id].inputs[1];
 
-                            let a_val = kernel.raw.def_var(DType::Float, ValueState::Mut, None);
+                            let a_val = kernel.raw.def_var(dtype, ValueState::Mut, None);
 
                             let mut a_deep = eval_node(
                                 root,
@@ -490,11 +510,12 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
                                 local_col,
                                 shared_size,
                                 tile_size,
+                                params,
                                 stable_iteration_space,
                                 options,
                             )?;
 
-                            let b_val = kernel.raw.def_var(DType::Float, ValueState::Mut, None);
+                            let b_val = kernel.raw.def_var(dtype, ValueState::Mut, None);
 
                             let mut b_deep = eval_node(
                                 root,
@@ -512,6 +533,7 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
                                 local_col,
                                 shared_size,
                                 tile_size,
+                                params,
                                 stable_iteration_space,
                                 options,
                             )?;
@@ -541,6 +563,7 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
                                 local_col,
                                 shared_size,
                                 tile_size,
+                                params,
                                 stable_iteration_space,
                                 options,
                             )?;
@@ -550,9 +573,9 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
 
                         Some(1) => {
                             let g_val = kernel.raw.def_var(
-                                DType::Float,
+                                dtype,
                                 ValueState::Mut,
-                                Some(Op::ConstF32 { value: 0.0 }),
+                                Some(dtype.constant_float(0.0)?),
                             );
 
                             let mut deep = eval_node(
@@ -571,6 +594,7 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
                                 local_col,
                                 shared_size,
                                 tile_size,
+                                params,
                                 stable_iteration_space,
                                 options,
                             )?;
@@ -604,6 +628,7 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
             },
             vec![a, b],
             get_shape(a, b, self),
+            self.nodes[a].dtype,
         )
     }
 
@@ -626,6 +651,7 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
                     ValueId,
                     u32,
                     ValueId,
+                    &[Param],
                     &mut bool,
                     &CompilationOptions<B>,
                 ) -> Result<Vec<NodeId>, Error>,
@@ -645,16 +671,18 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
                         local_col: ValueId,
                         shared_size: u32,
                         tile_size: ValueId,
+                        params: &[Param],
                         stable_iteration_space: &mut bool,
                         options: &CompilationOptions<B>| {
                     let mut deepest = Vec::new();
+                    let dtype = graph.nodes[node_id].dtype;
 
                     match backwardness {
                         None => {
                             let a = graph.nodes[node_id].inputs[0];
                             let b = graph.nodes[node_id].inputs[1];
 
-                            let a_val = kernel.raw.def_var(DType::Float, ValueState::Mut, None);
+                            let a_val = kernel.raw.def_var(dtype, ValueState::Mut, None);
 
                             let mut a_deep = eval_node(
                                 root,
@@ -672,11 +700,12 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
                                 local_col,
                                 shared_size,
                                 tile_size,
+                                params,
                                 stable_iteration_space,
                                 options,
                             )?;
 
-                            let b_val = kernel.raw.def_var(DType::Float, ValueState::Mut, None);
+                            let b_val = kernel.raw.def_var(dtype, ValueState::Mut, None);
 
                             let mut b_deep = eval_node(
                                 root,
@@ -694,6 +723,7 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
                                 local_col,
                                 shared_size,
                                 tile_size,
+                                params,
                                 stable_iteration_space,
                                 options,
                             )?;
@@ -708,9 +738,9 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
 
                         Some(0) => {
                             let g_val = kernel.raw.def_var(
-                                DType::Float,
+                                dtype,
                                 ValueState::Mut,
-                                Some(Op::ConstF32 { value: 0.0 }),
+                                Some(dtype.constant_float(0.0)?),
                             );
 
                             let mut deep = eval_node(
@@ -729,13 +759,15 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
                                 local_col,
                                 shared_size,
                                 tile_size,
+                                params,
                                 stable_iteration_space,
                                 options,
                             )?;
 
                             let user = graph.nodes[node_id].inputs[1];
 
-                            let saved = read_saved(kernel, idx, saved_params[user]);
+                            let saved =
+                                read_saved(kernel, idx, saved_params[user], graph, user, params)?;
 
                             kernel.raw.accum_var(out, Op::Div { a: g_val, b: saved });
 
@@ -744,9 +776,9 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
 
                         Some(1) => {
                             let g_val = kernel.raw.def_var(
-                                DType::Float,
+                                dtype,
                                 ValueState::Mut,
-                                Some(Op::ConstF32 { value: 0.0 }),
+                                Some(dtype.constant_float(0.0)?),
                             );
 
                             let mut deep = eval_node(
@@ -765,6 +797,7 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
                                 local_col,
                                 shared_size,
                                 tile_size,
+                                params,
                                 stable_iteration_space,
                                 options,
                             )?;
@@ -772,24 +805,23 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
                             let a = graph.nodes[node_id].inputs[0];
                             let b = graph.nodes[node_id].inputs[1];
 
-                            let a_val = read_saved(kernel, idx, saved_params[a]);
-
-                            let b_val = read_saved(kernel, idx, saved_params[b]);
+                            let a_val = read_saved(kernel, idx, saved_params[a], graph, a, params)?;
+                            let b_val = read_saved(kernel, idx, saved_params[b], graph, b, params)?;
 
                             let bb = kernel.raw.def_var(
-                                DType::Float,
+                                dtype,
                                 ValueState::Inline,
                                 Some(Op::Mul { a: b_val, b: b_val }),
                             );
 
                             let neg_g_val = kernel.raw.def_var(
-                                DType::Float,
+                                dtype,
                                 ValueState::Inline,
                                 Some(Op::Neg { x: g_val }),
                             );
 
                             let a_div_bb = kernel.raw.def_var(
-                                DType::Float,
+                                dtype,
                                 ValueState::Inline,
                                 Some(Op::Div { a: a_val, b: bb }),
                             );
@@ -829,6 +861,7 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
             },
             vec![a, b],
             get_shape(a, b, self),
+            self.nodes[a].dtype,
         )
     }
 }
@@ -848,20 +881,23 @@ fn read_saved<B: GpuBackend>(
     kernel: &mut LinkedKernel<'_, B>,
     index: ValueId,
     param: Option<ParamId>,
-) -> ValueId {
+    graph: &Graph<'_, B>,
+    node_id: NodeId,
+    params: &[Param],
+) -> Result<ValueId, Error> {
     if let Some(pid) = param {
         kernel.register_param(pid);
 
-        kernel.raw.def_var(
-            DType::Float,
+        Ok(kernel.raw.def_var(
+            params[pid].dtype,
             ValueState::Immut,
             Some(Op::ParamLoad { param: pid, index }),
-        )
+        ))
     } else {
-        kernel.raw.def_var(
-            DType::Float,
-            ValueState::Inline,
-            Some(Op::ConstF32 { value: 0.0 }),
-        )
+        let dtype = graph.nodes[node_id].dtype;
+
+        Ok(kernel
+            .raw
+            .def_var(dtype, ValueState::Inline, Some(dtype.constant_float(0.0)?)))
     }
 }

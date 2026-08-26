@@ -28,13 +28,13 @@ pub fn lower_backward<'a, B: GpuBackend>(
     let mut params = Vec::new();
 
     params.push(Param {
-        dtype: DType::UnsignedInt,
+        dtype: DType::U32,
         ty: ParamTy::Uniform,
         pid: 0,
     });
 
     params.push(Param {
-        dtype: DType::Float,
+        dtype: graph.nodes[graph.nodes.len() - 1].dtype,
         ty: ParamTy::ReadOnly,
         pid: 1,
     });
@@ -46,8 +46,10 @@ pub fn lower_backward<'a, B: GpuBackend>(
             let pid = params.len();
             grad_params[node_id] = Some(pid);
 
+            let dtype = graph.nodes[node_id].dtype;
+
             params.push(Param {
-                dtype: DType::Float,
+                dtype,
                 ty: ParamTy::ReadWrite,
                 pid,
             });
@@ -61,8 +63,10 @@ pub fn lower_backward<'a, B: GpuBackend>(
             let pid = params.len();
             *param = Some(pid);
 
+            let dtype = graph.nodes[node_id].dtype;
+
             params.push(Param {
-                dtype: DType::Float,
+                dtype,
                 ty: ParamTy::ReadOnly,
                 pid,
             });
@@ -74,8 +78,10 @@ pub fn lower_backward<'a, B: GpuBackend>(
             let pid = params.len();
             *param = Some(pid);
 
+            let dtype = graph.nodes[node_id].dtype;
+
             params.push(Param {
-                dtype: DType::Float,
+                dtype,
                 ty: ParamTy::ReadOnly,
                 pid,
             });
@@ -116,23 +122,23 @@ pub fn lower_backward<'a, B: GpuBackend>(
                     gen_kernel(meta, &params, [tile_size, tile_size, 1], root, root_node);
 
                 let upstream = kernel.raw.def_var(
-                    DType::Float,
+                    root_node.dtype,
                     ValueState::Mut,
-                    Some(Op::ConstF32 { value: 0.0 }),
+                    Some(root_node.dtype.constant_float(0.0)?),
                 );
 
                 let tile_size = kernel.raw.def_var(
-                    DType::UnsignedInt,
+                    DType::U32,
                     ValueState::Const,
                     Some(Op::ConstU32 { value: tile_size }),
                 );
                 let local_row = kernel.raw.def_var(
-                    DType::UnsignedInt,
+                    DType::U32,
                     ValueState::Immut,
                     Some(Op::LocalId { axis: Axis::Y }),
                 );
                 let local_col = kernel.raw.def_var(
-                    DType::UnsignedInt,
+                    DType::U32,
                     ValueState::Immut,
                     Some(Op::LocalId { axis: Axis::X }),
                 );
@@ -155,6 +161,7 @@ pub fn lower_backward<'a, B: GpuBackend>(
                     local_col,
                     shared_size,
                     tile_size,
+                    &params,
                     &mut stable_iteration_space,
                     options,
                 )?;
@@ -234,6 +241,7 @@ fn eval_grad<'a, B: GpuBackend>(
     local_col: ValueId,
     shared_size: u32,
     tile_size: ValueId,
+    params: &[Param],
     stable_iteration_space: &mut bool,
     options: &CompilationOptions<B>,
 ) -> Result<Vec<NodeId>, Error> {
@@ -339,6 +347,7 @@ fn eval_grad<'a, B: GpuBackend>(
                 local_col,
                 shared_size,
                 tile_size,
+                params,
                 stable_iteration_space,
                 options,
             )?;
@@ -388,7 +397,7 @@ fn gen_kernel<'a, B: GpuBackend>(
 
     for &meta_index in &root_node.shape {
         let dim_val = kernel.raw.def_var(
-            DType::UnsignedInt,
+            DType::U32,
             ValueState::Immut,
             Some(Op::ReadMeta {
                 param: 0,
@@ -409,24 +418,20 @@ fn gen_kernel<'a, B: GpuBackend>(
     }
 
     let gid = kernel.raw.def_var(
-        DType::UnsignedInt,
+        DType::U32,
         ValueState::Mut,
         Some(Op::GlobalId { axis: Axis::X }),
     );
 
-    let mut base = kernel.raw.def_var(
-        DType::UnsignedInt,
-        ValueState::Mut,
-        Some(Op::ConstU32 { value: 0 }),
-    );
+    let mut base = kernel
+        .raw
+        .def_var(DType::U32, ValueState::Mut, Some(Op::ConstU32 { value: 0 }));
 
     let total = dims[0];
     kernel.raw.update_var_state(total, ValueState::Mut);
 
     if dims.len() > 1 {
-        let gid2 = kernel
-            .raw
-            .def_var(DType::UnsignedInt, ValueState::Mut, None);
+        let gid2 = kernel.raw.def_var(DType::U32, ValueState::Mut, None);
 
         for (i, &d) in dims.iter().enumerate().skip(1) {
             kernel.raw.overwrite_var(
