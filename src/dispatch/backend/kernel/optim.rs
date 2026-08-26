@@ -1,10 +1,13 @@
-use crate::{dispatch::{
-    GpuBackend,
-    backend::{
-        Axis, DType, Graph, Metadata, Op, Param, ParamTy, ValueState,
-        kernel::{Kernel, RawKernel},
+use crate::{
+    dispatch::{
+        GpuBackend,
+        backend::{
+            Axis, DType, Graph, Metadata, Op, Param, ParamTy, ValueState,
+            kernel::{Kernel, RawKernel},
+        },
     },
-}, errors::Error};
+    errors::Error,
+};
 use alloc::{vec, vec::Vec};
 
 #[inline]
@@ -45,14 +48,14 @@ pub fn lower_optim<B: GpuBackend>(graph: &Graph<B>, meta: Metadata) -> Result<Ke
 
     let weight_param = kernel.params.len();
     kernel.params.push(Param {
-        dtype: dtype,
+        dtype,
         ty: ParamTy::ReadWrite,
         pid: 1,
     });
 
     let grad_param = kernel.params.len();
     kernel.params.push(Param {
-        dtype: dtype,
+        dtype,
         ty: ParamTy::ReadWrite,
         pid: 2,
     });
@@ -116,15 +119,16 @@ pub fn lower_optim<B: GpuBackend>(graph: &Graph<B>, meta: Metadata) -> Result<Ke
     let lr = kernel.raw.def_var(
         DType::F32,
         ValueState::Immut,
-        Some(Op::ReadMeta {
-            param: 0,
-            field: 0,
-        }),
+        Some(Op::ReadMeta { param: 0, field: 0 }),
     );
 
     let lr_normalized = match dtype {
-        DType::F16 => kernel.raw.def_var(dtype, ValueState::Immut, Some(Op::CastF16 { id: lr })),
-        DType::BF16 => kernel.raw.def_var(dtype, ValueState::Immut, Some(Op::CastBF16 { id: lr })),
+        DType::F16 => kernel
+            .raw
+            .def_var(dtype, ValueState::Immut, Some(Op::CastF16 { id: lr })),
+        DType::BF16 => kernel
+            .raw
+            .def_var(dtype, ValueState::Immut, Some(Op::CastBF16 { id: lr })),
         _ => lr,
     };
 

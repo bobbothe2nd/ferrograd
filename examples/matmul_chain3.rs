@@ -1,7 +1,9 @@
 use fused_gpu::{
     dispatch::{
-        CompilationOptions, GpuContext, Schedule, SyncSubmission, backend::{DType, Graph, LossType, Metadata, OptimType},
-    }, tensor::bf16,
+        CompilationOptions, GpuContext, Schedule, SyncSubmission,
+        backend::{DType, Graph, LossType, Metadata, OptimState, OptimType},
+    },
+    tensor::bf16,
 };
 use gpu_telemetry::monitor::{GpuMonitor, telemetry::Telemetry};
 use std::time::{Duration, Instant};
@@ -82,7 +84,12 @@ fn main() {
     let k = meta.new_field();
     let h = meta.new_field();
 
-    let mut graph = Graph::new(LossType::MEAN_SQUARED_ERROR, OptimType::STOCHASTIC_GRADIENT_DESCENT);
+    let state = OptimState::STOCHASTIC_GRADIENT_DESCENT;
+
+    let mut graph = Graph::new(
+        LossType::MEAN_SQUARED_ERROR,
+        OptimType::STOCHASTIC_GRADIENT_DESCENT,
+    );
 
     {
         let a = graph.input(&[m, k], DType::F32);
@@ -126,7 +133,7 @@ fn main() {
     let meta_binding = [briny::raw::cast::reinterpret(1e-3_f32), M, N, K, H];
     assert!(meta.validate_meta(&meta_binding));
 
-    let saved_tensors = ctx.alloc_tensors(&graph, &saved, &meta_binding);
+    let saved_tensors = ctx.alloc_tensors(&graph, &saved, &meta_binding, &state);
 
     ctx.upload(&saved_tensors.seed, &[1_f32; (H * H) as usize])
         .unwrap()
@@ -137,7 +144,14 @@ fn main() {
     println!("TENSOR INIT TIME: {tensor_elapsed:?} elapsed");
 
     let schedule = ctx
-        .schedule(&kernels, &meta_binding, &in_tensors, &saved_tensors)
+        .schedule(
+            &kernels,
+            &meta_binding,
+            &in_tensors,
+            &saved_tensors,
+            &[],
+            &state,
+        )
         .unwrap();
 
     let monitor: GpuMonitor<Telemetry> = GpuMonitor::start(Duration::from_millis(3)).unwrap();

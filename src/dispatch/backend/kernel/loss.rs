@@ -1,10 +1,13 @@
-use crate::{dispatch::{
-    GpuBackend,
-    backend::{
-        Axis, DType, Graph, Metadata, Op, Param, ParamTy, ValueState,
-        kernel::{Kernel, RawKernel},
+use crate::{
+    dispatch::{
+        GpuBackend,
+        backend::{
+            Axis, DType, Graph, Metadata, Op, Param, ParamTy, ValueState,
+            kernel::{Kernel, RawKernel},
+        },
     },
-}, errors::Error};
+    errors::Error,
+};
 use alloc::{vec, vec::Vec};
 
 #[inline]
@@ -45,28 +48,28 @@ pub fn lower_loss<B: GpuBackend>(graph: &Graph<B>, meta: Metadata) -> Result<Ker
 
     let loss_param = kernel.params.len();
     kernel.params.push(Param {
-        dtype: dtype,
+        dtype,
         ty: ParamTy::ReadWrite,
         pid: 1,
     });
 
     let grad_param = kernel.params.len();
     kernel.params.push(Param {
-        dtype: dtype,
+        dtype,
         ty: ParamTy::ReadWrite,
         pid: 2,
     });
 
     let pred_param = kernel.params.len();
     kernel.params.push(Param {
-        dtype: dtype,
+        dtype,
         ty: ParamTy::ReadOnly,
         pid: 3,
     });
 
     let target_param = kernel.params.len();
     kernel.params.push(Param {
-        dtype: dtype,
+        dtype,
         ty: ParamTy::ReadOnly,
         pid: 4,
     });

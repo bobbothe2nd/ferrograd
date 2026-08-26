@@ -1,7 +1,8 @@
 extern crate alloc;
 
 use fused_gpu::dispatch::{
-    CompilationOptions, GpuContext, backend::{DType, Graph, LossType, Metadata, OptimType},
+    CompilationOptions, GpuContext,
+    backend::{DType, Graph, LossType, Metadata, OptimState, OptimType},
 };
 
 #[test]
@@ -10,7 +11,12 @@ fn mul_add_forward_backward() {
     let m = meta.new_field();
     let n = meta.new_field();
 
-    let mut graph = Graph::new(LossType::MEAN_SQUARED_ERROR, OptimType::STOCHASTIC_GRADIENT_DESCENT);
+    let state = OptimState::STOCHASTIC_GRADIENT_DESCENT;
+
+    let mut graph = Graph::new(
+        LossType::MEAN_SQUARED_ERROR,
+        OptimType::STOCHASTIC_GRADIENT_DESCENT,
+    );
     let a = graph.input(&[m, n], DType::F32);
     let b = graph.input(&[m, n], DType::F32);
     let c = graph.input(&[m, n], DType::F32);
@@ -37,12 +43,19 @@ fn mul_add_forward_backward() {
     let meta_binding = [briny::raw::cast::reinterpret(1e-3_f32), 32, 32];
     assert!(meta.validate_meta(&meta_binding));
 
-    let saved_tensors = ctx.alloc_tensors(&graph, &saved, &meta_binding);
+    let saved_tensors = ctx.alloc_tensors(&graph, &saved, &meta_binding, &state);
 
     let upload = ctx.upload(&saved_tensors.seed, &[1_f32; 1024]).unwrap();
 
     let schedule = ctx
-        .schedule(&kernels, &meta_binding, &in_tensors, &saved_tensors)
+        .schedule(
+            &kernels,
+            &meta_binding,
+            &in_tensors,
+            &saved_tensors,
+            &[],
+            &state,
+        )
         .unwrap();
 
     let mut state = ctx.prepare_batch();
@@ -67,7 +80,6 @@ fn mul_add_forward_backward() {
     assert!(dst.iter().all(|x| *x == 7.0));
 
     ctx.download(&grad_tensors[0], &mut dst).unwrap();
-    std::eprintln!("{:?}", &dst[..64]);
     assert!(dst.iter().all(|x| *x == 2.0));
 
     ctx.download(&grad_tensors[1], &mut dst).unwrap();
@@ -84,7 +96,12 @@ fn matmul_sub_softmax_forward_backward() {
     let n = meta.new_field();
     let k = meta.new_field();
 
-    let mut graph = Graph::new(LossType::CROSS_ENTROPY, OptimType::STOCHASTIC_GRADIENT_DESCENT);
+    let state = OptimState::STOCHASTIC_GRADIENT_DESCENT;
+
+    let mut graph = Graph::new(
+        LossType::CROSS_ENTROPY,
+        OptimType::STOCHASTIC_GRADIENT_DESCENT,
+    );
     let a = graph.input(&[m, k], DType::F32);
     let b = graph.input(&[k, n], DType::F32);
     let c = graph.input(&[m, n], DType::F32);
@@ -112,12 +129,19 @@ fn matmul_sub_softmax_forward_backward() {
     let meta_binding = [briny::raw::cast::reinterpret(1e-3_f32), 16, 64, 32];
     assert!(meta.validate_meta(&meta_binding));
 
-    let saved_tensors = ctx.alloc_tensors(&graph, &saved, &meta_binding);
+    let saved_tensors = ctx.alloc_tensors(&graph, &saved, &meta_binding, &state);
 
     let upload = ctx.upload(&saved_tensors.seed, &[1.0_f32; 1024]).unwrap();
 
     let schedule = ctx
-        .schedule(&kernels, &meta_binding, &in_tensors, &saved_tensors)
+        .schedule(
+            &kernels,
+            &meta_binding,
+            &in_tensors,
+            &saved_tensors,
+            &[],
+            &state,
+        )
         .unwrap();
 
     let mut state = ctx.prepare_batch();
@@ -144,7 +168,6 @@ fn matmul_sub_softmax_forward_backward() {
     assert!(download.iter().all(|x| *x == 1.0 / 64.0));
 
     ctx.download(&grad_tensors[0], &mut dst).unwrap();
-    std::eprintln!("{:?}", &dst[..64]);
     let download = &dst[..512];
     assert!(download.iter().all(|x| *x == 0.0));
 
@@ -162,7 +185,12 @@ fn div_const_softmax_forward_backward() {
     let m = meta.new_field();
     let n = meta.new_field();
 
-    let mut graph = Graph::new(LossType::CROSS_ENTROPY, OptimType::STOCHASTIC_GRADIENT_DESCENT);
+    let state = OptimState::STOCHASTIC_GRADIENT_DESCENT;
+
+    let mut graph = Graph::new(
+        LossType::CROSS_ENTROPY,
+        OptimType::STOCHASTIC_GRADIENT_DESCENT,
+    );
     let x = graph.input(&[m, n], DType::F32);
 
     let two = graph.constant_f32(2.0);
@@ -185,12 +213,19 @@ fn div_const_softmax_forward_backward() {
     let meta_binding = [briny::raw::cast::reinterpret(1e-3_f32), 16, 32];
     assert!(meta.validate_meta(&meta_binding));
 
-    let saved_tensors = ctx.alloc_tensors(&graph, &saved, &meta_binding);
+    let saved_tensors = ctx.alloc_tensors(&graph, &saved, &meta_binding, &state);
 
     let upload = ctx.upload(&saved_tensors.seed, &[1_f32; 512]).unwrap();
 
     let schedule = ctx
-        .schedule(&kernels, &meta_binding, &in_tensors, &saved_tensors)
+        .schedule(
+            &kernels,
+            &meta_binding,
+            &in_tensors,
+            &saved_tensors,
+            &[],
+            &state,
+        )
         .unwrap();
 
     let mut state = ctx.prepare_batch();
@@ -212,11 +247,9 @@ fn div_const_softmax_forward_backward() {
     let grad_tensors = &saved_tensors.grad_tensors;
 
     ctx.download(out_tensor, &mut dst).unwrap();
-    std::eprintln!("{:?}", &dst[..64]);
     assert!(dst.iter().all(|x| *x == 2.0 + (1.0 / 32.0)));
 
     ctx.download(&grad_tensors[0], &mut dst).unwrap();
-    std::eprintln!("{:?}", &dst[..64]);
     assert!(dst.iter().all(|x| *x == 0.0));
 }
 
@@ -235,7 +268,12 @@ fn matmul_add_forward_backward() {
     let n = meta.new_field();
     let k = meta.new_field();
 
-    let mut graph = Graph::new(LossType::MEAN_SQUARED_ERROR, OptimType::STOCHASTIC_GRADIENT_DESCENT);
+    let state = OptimState::STOCHASTIC_GRADIENT_DESCENT;
+
+    let mut graph = Graph::new(
+        LossType::MEAN_SQUARED_ERROR,
+        OptimType::STOCHASTIC_GRADIENT_DESCENT,
+    );
     let a = graph.input(&[m, k], DType::F32);
     let b = graph.input(&[k, n], DType::F32);
     let c = graph.input(&[m, n], DType::F32);
@@ -262,14 +300,21 @@ fn matmul_add_forward_backward() {
     let meta_binding = [briny::raw::cast::reinterpret(1e-3_f32), M, N, K];
     assert!(meta.validate_meta(&meta_binding));
 
-    let saved_tensors = ctx.alloc_tensors(&graph, &saved, &meta_binding);
+    let saved_tensors = ctx.alloc_tensors(&graph, &saved, &meta_binding, &state);
 
     let upload = ctx
         .upload(&saved_tensors.seed, &[1_f32; (M * N) as usize])
         .unwrap();
 
     let schedule = ctx
-        .schedule(&kernels, &meta_binding, &in_tensors, &saved_tensors)
+        .schedule(
+            &kernels,
+            &meta_binding,
+            &in_tensors,
+            &saved_tensors,
+            &[],
+            &state,
+        )
         .unwrap();
 
     let mut state = ctx.prepare_batch();
@@ -299,7 +344,6 @@ fn matmul_add_forward_backward() {
     );
 
     ctx.download(&grad_tensors[0], &mut dst).unwrap();
-    std::eprintln!("{:?}", &dst[..64]);
     let download = &dst[..(M * K) as usize];
     assert!(download.iter().all(|x| *x == B_VAL * N as f32));
 
@@ -340,7 +384,12 @@ fn matmul_chain3_forward_backward() {
     let k = meta.new_field();
     let h = meta.new_field();
 
-    let mut graph = Graph::new(LossType::MEAN_SQUARED_ERROR, OptimType::STOCHASTIC_GRADIENT_DESCENT);
+    let state = OptimState::STOCHASTIC_GRADIENT_DESCENT;
+
+    let mut graph = Graph::new(
+        LossType::MEAN_SQUARED_ERROR,
+        OptimType::STOCHASTIC_GRADIENT_DESCENT,
+    );
 
     let a = graph.input(&[m, k], DType::F32);
     let b = graph.input(&[k, n], DType::F32);
@@ -374,14 +423,21 @@ fn matmul_chain3_forward_backward() {
     let meta_binding = [briny::raw::cast::reinterpret(1e-3_f32), M, N, K, H];
     assert!(meta.validate_meta(&meta_binding));
 
-    let saved_tensors = ctx.alloc_tensors(&graph, &saved, &meta_binding);
+    let saved_tensors = ctx.alloc_tensors(&graph, &saved, &meta_binding, &state);
 
     let upload = ctx
         .upload(&saved_tensors.seed, &[1_f32; (H * H) as usize])
         .unwrap();
 
     let schedule = ctx
-        .schedule(&kernels, &meta_binding, &in_tensors, &saved_tensors)
+        .schedule(
+            &kernels,
+            &meta_binding,
+            &in_tensors,
+            &saved_tensors,
+            &[],
+            &state,
+        )
         .unwrap();
 
     let mut state = ctx.prepare_batch();
@@ -421,7 +477,6 @@ fn matmul_chain3_forward_backward() {
     assert!(download.iter().all(|x| *x == Z_VAL + E_VAL));
 
     ctx.download(&grad_tensors[0], &mut dst).unwrap();
-    std::eprintln!("{:?}", &dst[..64]);
     let download = &dst[..(M * K) as usize];
     assert!(download.iter().all(|x| *x == A_GRAD));
 
@@ -467,7 +522,12 @@ fn matmul_sub_forward_backward() {
     let n = meta.new_field();
     let k = meta.new_field();
 
-    let mut graph = Graph::new(LossType::MEAN_SQUARED_ERROR, OptimType::STOCHASTIC_GRADIENT_DESCENT);
+    let state = OptimState::STOCHASTIC_GRADIENT_DESCENT;
+
+    let mut graph = Graph::new(
+        LossType::MEAN_SQUARED_ERROR,
+        OptimType::STOCHASTIC_GRADIENT_DESCENT,
+    );
 
     let a = graph.input(&[m, k], DType::F32);
     let b = graph.input(&[k, n], DType::F32);
@@ -501,14 +561,21 @@ fn matmul_sub_forward_backward() {
     let meta_binding = [briny::raw::cast::reinterpret(1e-3_f32), M, N, K];
     assert!(meta.validate_meta(&meta_binding));
 
-    let saved_tensors = ctx.alloc_tensors(&graph, &saved, &meta_binding);
+    let saved_tensors = ctx.alloc_tensors(&graph, &saved, &meta_binding, &state);
 
     let upload = ctx
         .upload(&saved_tensors.seed, &[1_f32; (M * N) as usize])
         .unwrap();
 
     let schedule = ctx
-        .schedule(&kernels, &meta_binding, &in_tensors, &saved_tensors)
+        .schedule(
+            &kernels,
+            &meta_binding,
+            &in_tensors,
+            &saved_tensors,
+            &[],
+            &state,
+        )
         .unwrap();
 
     let mut state = ctx.prepare_batch();
@@ -544,7 +611,6 @@ fn matmul_sub_forward_backward() {
     assert!(download.iter().all(|x| *x == Z_VAL));
 
     ctx.download(&grad_tensors[0], &mut dst).unwrap();
-    std::eprintln!("{:?}", &dst[..64]);
     let download = &dst[..(M * K) as usize];
     assert!(download.iter().all(|x| *x == A_GRAD));
 

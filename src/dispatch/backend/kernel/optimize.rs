@@ -12,9 +12,8 @@ pub fn optimize<B: GpuBackend>(kernel: &mut RawKernel, options: &CompilationOpti
             for value_id in 0..kernel.values.len() {
                 if kernel.values[value_id].state == ValueState::Mut
                     && kernel.values[value_id].init.is_some()
-                    && !(0..kernel.ops.len()).any(|statement| {
-                        kernel.ops[statement].does_mutate(value_id)
-                    })
+                    && !(0..kernel.ops.len())
+                        .any(|statement| kernel.ops[statement].does_mutate(value_id))
                 {
                     kernel.values[value_id].state = ValueState::Immut;
                 }

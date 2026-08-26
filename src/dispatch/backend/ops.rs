@@ -392,14 +392,14 @@ impl Op {
     }
 
     pub const fn replace_usage(&mut self, old_id: ValueId, new_id: ValueId) {
-        const fn replace(value_id: &mut ValueId, old_id: ValueId, new_id: ValueId) {
+        const fn replace_if_eq(value_id: &mut ValueId, old_id: ValueId, new_id: ValueId) {
             if *value_id == old_id {
                 *value_id = new_id;
             }
         }
 
         match self {
-            Self::CopyVar { id } => replace(id, old_id, new_id),
+            Self::CopyVar { id } => replace_if_eq(id, old_id, new_id),
             Self::Abs { x }
             | Self::Exp { x }
             | Self::Log { x }
@@ -411,7 +411,7 @@ impl Op {
             | Self::CastF16 { id: x }
             | Self::CastBF16 { id: x }
             | Self::CastU32 { id: x }
-            | Self::CastI32 { id: x } => replace(x, old_id, new_id),
+            | Self::CastI32 { id: x } => replace_if_eq(x, old_id, new_id),
             Self::Add { a, b }
             | Self::Div { a, b }
             | Self::Eq { a, b }
@@ -428,13 +428,13 @@ impl Op {
             | Self::Sub { a, b }
             | Self::Shl { a, b }
             | Self::Shr { a, b } => {
-                replace(a, old_id, new_id);
-                replace(b, old_id, new_id);
+                replace_if_eq(a, old_id, new_id);
+                replace_if_eq(b, old_id, new_id);
             }
             Self::Fma { a, b, c } => {
-                replace(a, old_id, new_id);
-                replace(b, old_id, new_id);
-                replace(c, old_id, new_id);
+                replace_if_eq(a, old_id, new_id);
+                replace_if_eq(b, old_id, new_id);
+                replace_if_eq(c, old_id, new_id);
             }
             Self::AddAssign { val, id }
             | Self::DivAssign { val, id }
@@ -443,15 +443,15 @@ impl Op {
             | Self::ShrAssign { val, id }
             | Self::SubAssign { val, id }
             | Self::OverwriteVar { val, id } => {
-                replace(id, old_id, new_id);
-                replace(val, old_id, new_id);
+                replace_if_eq(id, old_id, new_id);
+                replace_if_eq(val, old_id, new_id);
             }
             Self::ForLoopBegin { index, end, step } => {
-                replace(index, old_id, new_id);
-                replace(end, old_id, new_id);
-                replace(step, old_id, new_id);
+                replace_if_eq(index, old_id, new_id);
+                replace_if_eq(end, old_id, new_id);
+                replace_if_eq(step, old_id, new_id);
             }
-            Self::IfBegin { cond } => replace(cond, old_id, new_id),
+            Self::IfBegin { cond } => replace_if_eq(cond, old_id, new_id),
             Self::ParamAccum { index, value, .. }
             | Self::ParamDiv { index, value, .. }
             | Self::ParamMul { index, value, .. }
@@ -466,14 +466,16 @@ impl Op {
             | Self::SharedShr { index, value, .. }
             | Self::SharedStore { index, value, .. }
             | Self::SharedSub { index, value, .. } => {
-                replace(index, old_id, new_id);
-                replace(value, old_id, new_id);
+                replace_if_eq(index, old_id, new_id);
+                replace_if_eq(value, old_id, new_id);
             }
-            Self::ParamLoad { index, .. } | Self::SharedLoad { index, .. } => replace(index, old_id, new_id),
+            Self::ParamLoad { index, .. } | Self::SharedLoad { index, .. } => {
+                replace_if_eq(index, old_id, new_id);
+            }
             Self::Select { cond, a, b } => {
-                replace(cond, old_id, new_id);
-                replace(a, old_id, new_id);
-                replace(b, old_id, new_id);
+                replace_if_eq(cond, old_id, new_id);
+                replace_if_eq(a, old_id, new_id);
+                replace_if_eq(b, old_id, new_id);
             }
             Self::Barrier
             | Self::BlockId { .. }

@@ -9,23 +9,20 @@ impl LossType {
                 Some(Op::Sub { a: pred, b: target }),
             );
 
-            let loss_val = kernel.raw.def_var(
-                dtype,
-                ValueState::Immut,
-                Some(Op::Mul { a: diff, b: diff }),
-            );
+            let loss_val =
+                kernel
+                    .raw
+                    .def_var(dtype, ValueState::Immut, Some(Op::Mul { a: diff, b: diff }));
 
-            let two = kernel.raw.def_var(
-                dtype,
-                ValueState::Inline,
-                Some(dtype.constant_float(2.0)?),
-            );
+            let two =
+                kernel
+                    .raw
+                    .def_var(dtype, ValueState::Inline, Some(dtype.constant_float(2.0)?));
 
-            let grad_val = kernel.raw.def_var(
-                dtype,
-                ValueState::Immut,
-                Some(Op::Mul { a: two, b: diff }),
-            );
+            let grad_val =
+                kernel
+                    .raw
+                    .def_var(dtype, ValueState::Immut, Some(Op::Mul { a: two, b: diff }));
 
             Ok((loss_val, grad_val))
         },
@@ -33,16 +30,14 @@ impl LossType {
 
     pub const BINARY_CROSS_ENTROPY: Self = Self {
         lower: |kernel, dtype, pred, target, _, _, _, _| {
-            let one = kernel.raw.def_var(
-                dtype,
-                ValueState::Inline,
-                Some(dtype.constant_float(1.0)?),
-            );
-
-            let log_pred =
+            let one =
                 kernel
                     .raw
-                    .def_var(dtype, ValueState::Immut, Some(Op::Log { x: pred }));
+                    .def_var(dtype, ValueState::Inline, Some(dtype.constant_float(1.0)?));
+
+            let log_pred = kernel
+                .raw
+                .def_var(dtype, ValueState::Immut, Some(Op::Log { x: pred }));
 
             let one_minus_target = kernel.raw.def_var(
                 dtype,
@@ -114,11 +109,10 @@ impl LossType {
                 Some(Op::Eq { a: target, b: col }),
             );
 
-            let loss_val = kernel.raw.def_var(
-                dtype,
-                ValueState::Mut,
-                Some(dtype.constant_float(0.0)?),
-            );
+            let loss_val =
+                kernel
+                    .raw
+                    .def_var(dtype, ValueState::Mut, Some(dtype.constant_float(0.0)?));
 
             let grad_val =
                 kernel
@@ -126,14 +120,10 @@ impl LossType {
                     .def_var(dtype, ValueState::Mut, Some(Op::CopyVar { id: pred }));
 
             let _ = kernel.raw.push_if(target_eq_col, |kernel| {
-                let one = kernel.def_var(
-                    dtype,
-                    ValueState::Inline,
-                    Some(dtype.constant_float(1.0)?),
-                );
+                let one =
+                    kernel.def_var(dtype, ValueState::Inline, Some(dtype.constant_float(1.0)?));
 
-                let log_pred =
-                    kernel.def_var(dtype, ValueState::Inline, Some(Op::Log { x: pred }));
+                let log_pred = kernel.def_var(dtype, ValueState::Inline, Some(Op::Log { x: pred }));
 
                 kernel.overwrite_var(loss_val, Op::Neg { x: log_pred });
 

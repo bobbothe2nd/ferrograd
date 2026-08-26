@@ -2,7 +2,7 @@
 
 use crate::{
     dispatch::backend::{
-        Graph, MetaId, NodeId, Param,
+        Graph, MetaId, NodeId, OptimState, Param, StateDim,
         kernel::{Dependencies, RawKernel, Redirect, SaveIndicator},
     },
     errors::Error,
@@ -359,6 +359,20 @@ impl<'a, B: GpuBackend> BatchState<'a, B> {
 pub struct Schedule<'a, B: GpuBackend = backend::GpuContext> {
     forward: B::Schedule<'a>,
     backward: B::Schedule<'a>,
+    loss: LossSchedule<'a, B>,
+    optim: OptimSchedule<'a, B>,
+}
+
+struct LossSchedule<'a, B: GpuBackend> {
+    grid: [u32; 3],
+    bindings: [&'a B::Buffer; 5],
+    kernel: &'a B::Kernel,
+}
+
+struct OptimSchedule<'a, B: GpuBackend> {
+    bindings: Vec<&'a B::Buffer>,
+    kernel: &'a B::Kernel,
+    state: &'a [B::Buffer],
 }
 
 /// Generic GPU context storing a handle to the device and shaders.
@@ -485,7 +499,9 @@ impl<B: GpuBackend> GpuContext<B> {
             >>()?;
 
         let loss = self.inner.compile(&ir.loss.raw, &ir.loss.params, options)?;
-        let optim = self.inner.compile(&ir.optim.raw, &ir.optim.params, options)?;
+        let optim = self
+            .inner
+            .compile(&ir.optim.raw, &ir.optim.params, options)?;
 
         Ok(KernelGroup {
             forward,
@@ -544,50 +560,6 @@ impl<B: GpuBackend> GpuContext<B> {
             .map(|x| SubmissionIndex(x, self))
     }
 
-    pub fn schedule<'a>(
-        &self,
-        kernels: &'a KernelGroup<B>,
-        meta: &[u32],
-        in_tensors: &'a [Tensor<B>],
-        alloc_tensors: &'a AllocTensors<B>,
-    ) -> Result<Schedule<'a, B>, Error> {
-        let mut bindings = Vec::new();
-
-        bindings.push(&alloc_tensors.meta);
-
-        alloc_tensors
-            .forward_saved
-            .iter()
-            .for_each(|t| bindings.push(t));
-        for t in in_tensors {
-            bindings.push(&t.data.inner);
-        }
-
-        bindings.push(&alloc_tensors.forward_out);
-
-        let forward = self.inner.schedule(&kernels.forward, &bindings, meta)?;
-
-        bindings.truncate(1);
-
-        bindings.push(&alloc_tensors.seed);
-
-        alloc_tensors
-            .grad_tensors
-            .iter()
-            .for_each(|t| bindings.push(t));
-        for t in in_tensors {
-            bindings.push(&t.data.inner);
-        }
-        alloc_tensors
-            .forward_saved
-            .iter()
-            .for_each(|t| bindings.push(t));
-
-        let backward = self.inner.schedule(&kernels.backward, &bindings, meta)?;
-
-        Ok(Schedule { forward, backward })
-    }
-
     pub fn prepare_batch(&self) -> BatchState<'_, B> {
         BatchState(self.inner.prepare_batch(), self)
     }
@@ -596,14 +568,16 @@ impl<B: GpuBackend> GpuContext<B> {
         Batcher(self.inner.start_batch(&mut state.0), self)
     }
 
-    pub fn alloc_tensors(
+    pub fn alloc_tensors<const N: usize>(
         &self,
         graph: &Graph,
         saved: &[SaveIndicator],
         meta: &[u32],
+        state: &OptimState<N>,
     ) -> AllocTensors<B> {
         let mut forward_saved = Vec::new();
         let mut grad_tensors = Vec::new();
+        let mut state_tensors = Vec::new();
 
         for (idx, save) in saved.iter().enumerate() {
             let node = &graph.nodes[idx];
@@ -620,6 +594,18 @@ impl<B: GpuBackend> GpuContext<B> {
             if save.is_defined_in_backward() {
                 let buf = self.inner.alloc(len);
                 grad_tensors.push(buf);
+
+                state_tensors.reserve(N);
+
+                for state_t in 0..N {
+                    let len = match state.shapes[state_t] {
+                        StateDim::Const(value) => value as usize,
+                        StateDim::GradRelative(value) => len * (value as usize),
+                    };
+                    let buf = self.inner.alloc(len);
+
+                    state_tensors.push(buf);
+                }
             }
         }
 
@@ -639,11 +625,12 @@ impl<B: GpuBackend> GpuContext<B> {
             forward_saved,
             grad_tensors,
             forward_out,
+            seed,
+            state: state_tensors,
             loss_t: Tensor {
                 shape,
                 data: GpuBuffer { inner: loss_t },
             },
-            seed,
         }
     }
 
@@ -719,6 +706,92 @@ impl<B: GpuBackend> GpuContext<B> {
             shape: vec![indices.len() as u32],
         }
     }
+
+    pub fn schedule<'a, const N: usize>(
+        &self,
+        kernels: &'a KernelGroup<B>,
+        meta: &[u32],
+        in_tensors: &'a [Tensor<B>],
+        alloc_tensors: &'a AllocTensors<B>,
+        state: &'a [B::Buffer],
+        _optim: &OptimState<N>,
+    ) -> Result<Schedule<'a, B>, Error>
+    where
+        B::Buffer: Sized,
+    {
+        let mut bindings = Vec::new();
+
+        bindings.push(&alloc_tensors.meta);
+
+        alloc_tensors
+            .forward_saved
+            .iter()
+            .for_each(|t| bindings.push(t));
+        for t in in_tensors {
+            bindings.push(&t.data.inner);
+        }
+
+        bindings.push(&alloc_tensors.forward_out);
+
+        let forward = self.inner.schedule(&kernels.forward, &bindings, meta)?;
+
+        bindings.truncate(1);
+
+        bindings.push(&alloc_tensors.seed);
+
+        alloc_tensors
+            .grad_tensors
+            .iter()
+            .for_each(|t| bindings.push(t));
+        for t in in_tensors {
+            bindings.push(&t.data.inner);
+        }
+        alloc_tensors
+            .forward_saved
+            .iter()
+            .for_each(|t| bindings.push(t));
+
+        let backward = self.inner.schedule(&kernels.backward, &bindings, meta)?;
+
+        let grid = alloc_tensors.loss_t.calc_grid(*kernels.loss.block());
+
+        let bindings = [
+            &alloc_tensors.meta,
+            &alloc_tensors.loss_t.data.inner,
+            &alloc_tensors.seed,
+            &alloc_tensors.forward_out,
+            &alloc_tensors.seed,
+        ];
+
+        let loss = LossSchedule {
+            grid,
+            bindings,
+            kernel: &kernels.loss,
+        };
+
+        let mut bindings = vec![
+            &alloc_tensors.meta,
+            &alloc_tensors.meta,
+            &alloc_tensors.meta,
+        ];
+
+        for _ in 0..N {
+            bindings.push(&alloc_tensors.meta);
+        }
+
+        let optim = OptimSchedule {
+            bindings,
+            kernel: &kernels.optim,
+            state,
+        };
+
+        Ok(Schedule {
+            forward,
+            backward,
+            loss,
+            optim,
+        })
+    }
 }
 
 #[must_use]
@@ -737,45 +810,37 @@ impl<B: GpuBackend> Batcher<'_, B> {
             .dispatch_schedule(&mut self.0, &schedule.backward);
     }
 
-    pub fn launch_loss(
-        &mut self,
-        kernels: &KernelGroup<B>,
-        target: &Tensor<B>,
-        tensors: &AllocTensors<B>,
-    ) {
-        let grid = tensors.loss_t.calc_grid(*kernels.loss.block());
-
-        let bindings = [
-            &tensors.meta,
-            &tensors.loss_t.data.inner,
-            &tensors.seed,
-            &tensors.forward_out,
-            &target.data.inner,
-        ];
-
-        self.1
-            .inner
-            .dispatch_kernel(&mut self.0, &kernels.loss, grid, &bindings);
+    pub fn dispatch_loss(&mut self, schedule: &Schedule<'_, B>) {
+        self.1.inner.dispatch_kernel(
+            &mut self.0,
+            schedule.loss.kernel,
+            schedule.loss.grid,
+            &schedule.loss.bindings,
+        );
     }
 
-    pub fn launch_optim<T: ToBuffer<B>, U: ToBuffer<B>>(
+    pub fn dispatch_optim<'a, const N: usize>(
         &mut self,
-        kernels: &KernelGroup<B>,
-        weight: &T,
-        grad: &U,
-        tensors: &AllocTensors<B>,
+        schedule: &mut Schedule<'a, B>,
+        weight: &'a Tensor<B>,
+        grad: usize,
+        tensors: &'a AllocTensors<B>,
     ) {
-        let grid = tensors.loss_t.calc_grid(*kernels.optim.block());
+        let grid = weight.calc_grid(*schedule.optim.kernel.block());
 
-        let bindings = [
-            &tensors.meta,
-            weight.as_buffer(),
-            grad.as_buffer(),
-        ];
+        schedule.optim.bindings[1] = weight.as_buffer();
+        schedule.optim.bindings[2] = &tensors.grad_tensors[grad];
 
-        self.1
-            .inner
-            .dispatch_kernel(&mut self.0, &kernels.optim, grid, &bindings);
+        for state_t in 0..N {
+            schedule.optim.bindings[3 + state_t] = &schedule.optim.state[state_t];
+        }
+
+        self.1.inner.dispatch_kernel(
+            &mut self.0,
+            schedule.optim.kernel,
+            grid,
+            &schedule.optim.bindings,
+        );
     }
 }
 
@@ -786,6 +851,8 @@ pub struct AllocTensors<B: GpuBackend = backend::GpuContext> {
     pub grad_tensors: Vec<B::Buffer>,
     pub forward_out: B::Buffer,
     pub seed: B::Buffer,
+
+    pub state: Vec<B::Buffer>,
 
     pub loss_t: Tensor<B>,
 }

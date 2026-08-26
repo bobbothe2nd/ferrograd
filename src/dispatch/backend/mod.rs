@@ -394,8 +394,16 @@ pub struct LossType {
     ///     grad_val: ValueId
     /// )
     /// ```
-    pub lower:
-        fn(&mut Kernel, DType, ValueId, ValueId, ParamId, ParamId, ValueId, ValueId) -> Result<(ValueId, ValueId), Error>,
+    pub lower: fn(
+        &mut Kernel,
+        DType,
+        ValueId,
+        ValueId,
+        ParamId,
+        ParamId,
+        ValueId,
+        ValueId,
+    ) -> Result<(ValueId, ValueId), Error>,
 }
 
 #[derive(Debug, Clone, Copy, Hash)]
@@ -412,8 +420,27 @@ pub struct OptimType {
     ///     col: ValueId,
     /// )
     /// ```
-    pub lower:
-        fn(&mut Kernel, DType, ValueId, ParamId, ParamId, ValueId, ValueId, ValueId) -> Result<(), Error>,
+    pub lower: fn(
+        &mut Kernel,
+        DType,
+        ValueId,
+        ParamId,
+        ParamId,
+        ValueId,
+        ValueId,
+        ValueId,
+    ) -> Result<(), Error>,
+}
+
+#[derive(Debug)]
+pub struct OptimState<const N: usize> {
+    pub shapes: [StateDim; N],
+}
+
+#[derive(Debug, Clone, Copy, Hash)]
+pub enum StateDim {
+    Const(u32),
+    GradRelative(u32),
 }
 
 #[derive(Debug, Default, Clone, Copy, Hash, PartialEq, Eq, PartialOrd, Ord)]
