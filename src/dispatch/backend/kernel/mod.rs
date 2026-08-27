@@ -209,18 +209,18 @@ impl<'a> KernelsChained<'a> {
 
         for kernel in &mut forward.kernels {
             if let Redirect::Unmasked(kernel) = &mut kernel.val {
-                optimize::optimize(&mut kernel.raw, options);
+                optimize::optimize(&mut kernel.raw, options)?;
             }
         }
 
         for kernel in &mut backward.kernels {
             if let Redirect::Unmasked(kernel) = &mut kernel.val {
-                optimize::optimize(&mut kernel.raw, options);
+                optimize::optimize(&mut kernel.raw, options)?;
             }
         }
 
-        optimize::optimize(&mut loss.raw, options);
-        optimize::optimize(&mut optim.raw, options);
+        optimize::optimize(&mut loss.raw, options)?;
+        optimize::optimize(&mut optim.raw, options)?;
 
         Ok(KernelGroup {
             forward,

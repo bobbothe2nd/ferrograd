@@ -130,7 +130,7 @@ fn main() {
         ctx.init_tensor_bf16(&[H, H], &[E_VAL; (H * H) as usize]),
     ];
 
-    let meta_binding = [briny::raw::cast::reinterpret(1e-3_f32), M, N, K, H];
+    let meta_binding = [1e-3_f32.to_bits(), M, N, K, H];
     assert!(meta.validate_meta(&meta_binding));
 
     let saved_tensors = ctx.alloc_tensors(&graph, &saved, &meta_binding, &state);

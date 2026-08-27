@@ -549,16 +549,20 @@ fn generate_wgsl(
     params: &[Param],
     pretty_print: bool,
 ) -> Result<String, Error> {
-    let mut out = String::from_str("enable f16; ").map_err(|_| Error {
+    let mut out = String::from_str("enable f16;").map_err(|_| Error {
         msg: "infallible",
         kind: ErrorKind::InternalError,
         ctx: (),
     })?;
 
+    newline(pretty_print, &mut out, 0);
+
     emit_bindings(kernel, params, &mut out, pretty_print)?;
     newline(pretty_print, &mut out, 0);
 
     emit_entry(kernel, &mut out, pretty_print)?;
+
+    std::println!("{out}\n");
 
     Ok(out)
 }
@@ -611,7 +615,9 @@ fn emit_bindings(
     out: &mut String,
     pretty_print: bool,
 ) -> Result<(), Error> {
-    let _ = write!(out, "struct Meta {{ f0: f32,");
+    let _ = write!(out, "struct Meta {{");
+    newline(pretty_print, out, 0);
+    let _ = write!(out, "f0: f32,");
     for f in 1..kernel.meta.fields {
         newline(pretty_print, out, 1);
         let _ = write!(out, "f{f}: u32,");

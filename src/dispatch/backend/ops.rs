@@ -1,4 +1,4 @@
-use crate::dispatch::backend::{Axis, MetaId, ParamId, SharedId, ValueId};
+use crate::dispatch::backend::{Axis, MetaId, ParamId, SharedId, ValueId, ValueState, kernel::RawKernel};
 
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -310,6 +310,7 @@ pub enum Op {
 
 impl Op {
     #[must_use]
+    #[inline]
     pub fn does_read(&self, value_id: ValueId) -> bool {
         match self {
             Self::Barrier
@@ -391,7 +392,9 @@ impl Op {
         }
     }
 
+    #[inline]
     pub const fn replace_usage(&mut self, old_id: ValueId, new_id: ValueId) {
+        #[inline]
         const fn replace_if_eq(value_id: &mut ValueId, old_id: ValueId, new_id: ValueId) {
             if *value_id == old_id {
                 *value_id = new_id;
@@ -499,6 +502,101 @@ impl Op {
         }
     }
 
+    #[inline]
+    pub fn read_only(&self, kernel: &RawKernel) -> bool {
+        #[inline]
+        fn not_mut(value_id: ValueId, kernel: &RawKernel) -> bool {
+            kernel.values[value_id].state != ValueState::Mut
+        }
+
+        match self {
+            Self::CopyVar { id } => not_mut(*id, kernel),
+            Self::Abs { x }
+            | Self::Exp { x }
+            | Self::Log { x }
+            | Self::Neg { x }
+            | Self::Sqrt { x }
+            | Self::Tanh { x }
+            | Self::Not { cond: x }
+            | Self::CastF32 { id: x }
+            | Self::CastF16 { id: x }
+            | Self::CastBF16 { id: x }
+            | Self::CastU32 { id: x }
+            | Self::CastI32 { id: x } => not_mut(*x, kernel),
+            Self::Add { a, b }
+            | Self::Div { a, b }
+            | Self::Eq { a, b }
+            | Self::Ge { a, b }
+            | Self::Gt { a, b }
+            | Self::Le { a, b }
+            | Self::Lt { a, b }
+            | Self::Ne { a, b }
+            | Self::Max { a, b }
+            | Self::Min { a, b }
+            | Self::Mod { a, b }
+            | Self::Mul { a, b }
+            | Self::Pow { a, b }
+            | Self::Sub { a, b }
+            | Self::Shl { a, b }
+            | Self::Shr { a, b } => not_mut(*a, kernel)
+                && not_mut(*b, kernel),
+            Self::Fma { a, b, c } => not_mut(*a, kernel)
+                && not_mut(*b, kernel)
+                && not_mut(*c, kernel),
+            Self::AddAssign { val, id }
+            | Self::DivAssign { val, id }
+            | Self::MulAssign { val, id }
+            | Self::ShlAssign { val, id }
+            | Self::ShrAssign { val, id }
+            | Self::SubAssign { val, id }
+            | Self::OverwriteVar { val, id } => not_mut(*val, kernel)
+                && not_mut(*id, kernel),
+            Self::ForLoopBegin { index, end, step } => not_mut(*index, kernel)
+                && not_mut(*end, kernel)
+                && not_mut(*step, kernel),
+            Self::IfBegin { cond } => not_mut(*cond, kernel),
+            Self::ParamAccum { index, value, .. }
+            | Self::ParamDiv { index, value, .. }
+            | Self::ParamMul { index, value, .. }
+            | Self::ParamShl { index, value, .. }
+            | Self::ParamShr { index, value, .. }
+            | Self::ParamStore { index, value, .. }
+            | Self::ParamSub { index, value, .. }
+            | Self::SharedAccum { index, value, .. }
+            | Self::SharedDiv { index, value, .. }
+            | Self::SharedMul { index, value, .. }
+            | Self::SharedShl { index, value, .. }
+            | Self::SharedShr { index, value, .. }
+            | Self::SharedStore { index, value, .. }
+            | Self::SharedSub { index, value, .. } => not_mut(*index, kernel)
+                && not_mut(*value, kernel),
+            Self::ParamLoad { index, .. } | Self::SharedLoad { index, .. } => not_mut(*index, kernel),
+            Self::Select { cond, a, b } => not_mut(*cond, kernel)
+                && not_mut(*a, kernel)
+                && not_mut(*b, kernel),
+            Self::Barrier
+            | Self::BlockId { .. }
+            | Self::Break
+            | Self::ConstF32 { .. }
+            | Self::ConstF16 { .. }
+            | Self::ConstBf16 { .. }
+            | Self::ConstI32 { .. }
+            | Self::ConstU32 { .. }
+            | Self::Continue
+            | Self::DefineVar { .. }
+            | Self::ElseBegin
+            | Self::EndScope
+            | Self::ForeverLoopBegin
+            | Self::GlobalId { .. }
+            | Self::LocalId { .. }
+            | Self::ReadMeta { .. }
+            | Self::Return
+            | Self::Nop
+            | Self::StartScope => false
+        }
+    }
+
+    #[inline]
     #[must_use]
     pub fn does_write(&self, value_id: ValueId) -> bool {
         match self {
@@ -515,6 +613,7 @@ impl Op {
         }
     }
 
+    #[inline]
     #[must_use]
     pub const fn writes_to(&self) -> Option<ValueId> {
         match self {
@@ -531,6 +630,7 @@ impl Op {
         }
     }
 
+    #[inline]
     #[must_use]
     pub fn does_mutate(&self, value_id: ValueId) -> bool {
         match self {
@@ -546,6 +646,7 @@ impl Op {
         }
     }
 
+    #[inline]
     #[must_use]
     pub const fn is_zero(&self) -> bool {
         match self {
@@ -556,6 +657,7 @@ impl Op {
         }
     }
 
+    #[inline]
     #[must_use]
     pub const fn is_one(&self) -> bool {
         match self {

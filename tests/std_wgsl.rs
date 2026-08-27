@@ -40,7 +40,7 @@ fn mul_add_forward_backward() {
         ctx.init_tensor_f32(&[32, 32], &[1.0; 1024]),
     ];
 
-    let meta_binding = [briny::raw::cast::reinterpret(1e-3_f32), 32, 32];
+    let meta_binding = [1e-3_f32.to_bits(), 32, 32];
     assert!(meta.validate_meta(&meta_binding));
 
     let saved_tensors = ctx.alloc_tensors(&graph, &saved, &meta_binding, &state);
@@ -126,7 +126,7 @@ fn matmul_sub_softmax_forward_backward() {
         ctx.init_tensor_f32(&[16, 64], &[1.0; 1024]),
     ];
 
-    let meta_binding = [briny::raw::cast::reinterpret(1e-3_f32), 16, 64, 32];
+    let meta_binding = [1e-3_f32.to_bits(), 16, 64, 32];
     assert!(meta.validate_meta(&meta_binding));
 
     let saved_tensors = ctx.alloc_tensors(&graph, &saved, &meta_binding, &state);
@@ -164,7 +164,6 @@ fn matmul_sub_softmax_forward_backward() {
 
     ctx.download(out_tensor, &mut dst).unwrap();
     let download = &dst[..1024];
-    std::eprintln!("{:?}", &download[..64]);
     assert!(download.iter().all(|x| *x == 1.0 / 64.0));
 
     ctx.download(&grad_tensors[0], &mut dst).unwrap();
@@ -210,7 +209,7 @@ fn div_const_softmax_forward_backward() {
 
     let in_tensors = [ctx.init_tensor_f32(&[16, 32], &[3.0; 512])];
 
-    let meta_binding = [briny::raw::cast::reinterpret(1e-3_f32), 16, 32];
+    let meta_binding = [1e-3_f32.to_bits(), 16, 32];
     assert!(meta.validate_meta(&meta_binding));
 
     let saved_tensors = ctx.alloc_tensors(&graph, &saved, &meta_binding, &state);
@@ -274,12 +273,15 @@ fn matmul_add_forward_backward() {
         LossType::MEAN_SQUARED_ERROR,
         OptimType::STOCHASTIC_GRADIENT_DESCENT,
     );
-    let a = graph.input(&[m, k], DType::F32);
-    let b = graph.input(&[k, n], DType::F32);
-    let c = graph.input(&[m, n], DType::F32);
 
-    let x = graph.matmul(a, b);
-    graph.add(x, c);
+    {
+        let a = graph.input(&[m, k], DType::F32);
+        let b = graph.input(&[k, n], DType::F32);
+        let c = graph.input(&[m, n], DType::F32);
+
+        let x = graph.matmul(a, b);
+        graph.add(x, c);
+    }
 
     let saved = graph.compute_saved_nodes();
     let options = CompilationOptions::default();
@@ -297,7 +299,7 @@ fn matmul_add_forward_backward() {
         ctx.init_tensor_f32(&[M, N], &[C_VAL; (M * N) as usize]),
     ];
 
-    let meta_binding = [briny::raw::cast::reinterpret(1e-3_f32), M, N, K];
+    let meta_binding = [1e-3_f32.to_bits(), M, N, K];
     assert!(meta.validate_meta(&meta_binding));
 
     let saved_tensors = ctx.alloc_tensors(&graph, &saved, &meta_binding, &state);
@@ -420,7 +422,7 @@ fn matmul_chain3_forward_backward() {
         ctx.init_tensor_f32(&[H, H], &[E_VAL; (H * H) as usize]),
     ];
 
-    let meta_binding = [briny::raw::cast::reinterpret(1e-3_f32), M, N, K, H];
+    let meta_binding = [1e-3_f32.to_bits(), M, N, K, H];
     assert!(meta.validate_meta(&meta_binding));
 
     let saved_tensors = ctx.alloc_tensors(&graph, &saved, &meta_binding, &state);
@@ -558,7 +560,7 @@ fn matmul_sub_forward_backward() {
         ctx.init_tensor_f32(&[K, N], &[D_VAL; (K * N) as usize]),
     ];
 
-    let meta_binding = [briny::raw::cast::reinterpret(1e-3_f32), M, N, K];
+    let meta_binding = [1e-3_f32.to_bits(), M, N, K];
     assert!(meta.validate_meta(&meta_binding));
 
     let saved_tensors = ctx.alloc_tensors(&graph, &saved, &meta_binding, &state);

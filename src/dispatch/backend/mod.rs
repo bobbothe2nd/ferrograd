@@ -1084,7 +1084,7 @@ impl<'a, B: GpuBackend> Graph<'a, B> {
     ///
     /// # Errors
     ///
-    ///
+    /// Fails if the graph has invalid operations.
     pub fn lower(
         &'a self,
         meta: Metadata,

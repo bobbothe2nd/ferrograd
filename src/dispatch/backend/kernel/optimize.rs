@@ -1,10 +1,12 @@
-use crate::dispatch::{
+use core::range::Range;
+
+use crate::{dispatch::{
     CompilationOptions, GpuBackend, OptFlags,
     backend::{DType, Op, ValueId, ValueState, kernel::RawKernel},
-};
-use alloc::vec::Vec;
+}, errors::{Error, ErrorKind}};
+use alloc::{vec, vec::Vec};
 
-pub fn optimize<B: GpuBackend>(kernel: &mut RawKernel, options: &CompilationOptions<B>) {
+pub fn optimize<B: GpuBackend>(kernel: &mut RawKernel, options: &CompilationOptions<B>) -> Result<(), Error> {
     for _ in 0..options.opt.passes {
         dead_code_elimination(kernel, options);
 
@@ -20,19 +22,13 @@ pub fn optimize<B: GpuBackend>(kernel: &mut RawKernel, options: &CompilationOpti
             }
         }
 
-        // if options.opt.flags.contains(OptFlags::LOOP_STATELESS) {}
-
-        // if options.opt.flags.contains(OptFlags::REUSE_INLINE) {}
-
-        // if options.opt.flags.contains(OptFlags::OP_ASSIGN) {}
-
-        // if options.opt.flags.contains(OptFlags::EMPTY_SCOPE) {}
-
-        // if options.opt.flags.contains(OptFlags::LATE_INIT) {}
+        if options.opt.flags.contains(OptFlags::OP_ASSIGN) {
+            op_assign(kernel);
+        }
 
         if options.opt.flags.contains(OptFlags::MUL_ADD) {
             for value_id in 0..kernel.values.len() {
-                if kernel.values[value_id].state == ValueState::Masked
+                if kernel.values[value_id].state == ValueState::Masked 
                     || !matches!(
                         kernel.values[value_id].dtype,
                         DType::F32 | DType::F16 | DType::BF16
@@ -43,16 +39,12 @@ pub fn optimize<B: GpuBackend>(kernel: &mut RawKernel, options: &CompilationOpti
 
                 if let Some(Op::Add { a, b }) = kernel.values[value_id].init {
                     if let Some(Op::Mul { a: a_mul, b: b_mul }) = kernel.values[a].init {
-                        kernel.values[a].state = ValueState::Masked;
-
                         kernel.values[value_id].init.replace(Op::Fma {
                             a: a_mul,
                             b: b_mul,
                             c: b,
                         });
                     } else if let Some(Op::Mul { a: a_mul, b: b_mul }) = kernel.values[b].init {
-                        kernel.values[b].state = ValueState::Masked;
-
                         kernel.values[value_id].init.replace(Op::Fma {
                             a: a_mul,
                             b: b_mul,
@@ -63,7 +55,7 @@ pub fn optimize<B: GpuBackend>(kernel: &mut RawKernel, options: &CompilationOpti
             }
 
             let additions = iter_values(kernel, |op, value_id| {
-                if kernel.values[value_id].state == ValueState::Masked
+                if kernel.values[value_id].state == ValueState::Masked 
                     || !matches!(
                         kernel.values[value_id].dtype,
                         DType::F32 | DType::F16 | DType::BF16
@@ -100,7 +92,7 @@ pub fn optimize<B: GpuBackend>(kernel: &mut RawKernel, options: &CompilationOpti
 
         if options.opt.flags.contains(OptFlags::DIV_CONST) {
             let divisions = iter_values(kernel, |op, value_id| {
-                if kernel.values[value_id].state == ValueState::Masked
+                if kernel.values[value_id].state == ValueState::Masked 
                     || !matches!(
                         kernel.values[value_id].dtype,
                         DType::F32 | DType::F16 | DType::BF16
@@ -151,20 +143,17 @@ pub fn optimize<B: GpuBackend>(kernel: &mut RawKernel, options: &CompilationOpti
             }
         }
 
-        /*
-        must move to smallest scope which encompasses all uses of duplicates and copies
-
         if options.opt.flags.contains(OptFlags::COPY_IMMUT) {
             for value_id in 0..kernel.values.len() {
-                if matches!(kernel.values[value_id].state, ValueState::Mut | ValueState::Masked) {
+                if !matches!(kernel.values[value_id].state, ValueState::Inline | ValueState::Immut) {
                     continue;
                 }
 
                 let copy_op = Op::CopyVar { id: value_id };
 
                 let copies = iter_values(&kernel, |op, value_id| {
-                    if op != &copy_op
-                        && kernel.values[value_id].state == ValueState::Mut
+                    if op == &copy_op
+                        && kernel.values[value_id].state != ValueState::Mut
                     {
                         Some(value_id)
                     } else {
@@ -173,48 +162,123 @@ pub fn optimize<B: GpuBackend>(kernel: &mut RawKernel, options: &CompilationOpti
                 });
 
                 for copy_id in copies {
-                    if let Some(copy_op) = &mut kernel.values[copy_id].init {
-                        copy_op.replace_usage(copy_id, value_id);
+                    for value in &mut kernel.values {
+                        if let Some(op) = &mut value.init {
+                           op.replace_usage(copy_id, value_id);
+                        }
+                    }
+
+                    for op in &mut kernel.ops {
+                        op.replace_usage(copy_id, value_id);
                     }
                 }
             }
         }
 
         if options.opt.flags.contains(OptFlags::DUPLICATE_IMMUT) {
-            for value_id in 0..kernel.values.len() {
-                if matches!(kernel.values[value_id].state, ValueState::Mut | ValueState::Masked) {
+            let mut value_id = 0;
+
+            while value_id < kernel.values.len() {
+                if !matches!(kernel.values[value_id].state, ValueState::Inline | ValueState::Immut) {
+                    value_id += 1;
                     continue;
                 }
 
-                let duplicates = {
-                    let mut previous = Vec::with_capacity(kernel.values.len());
+                let dtype = kernel.values[value_id].dtype;
 
-                    iter_values(&kernel, |op, value_id| {
-                        previous.push(*op);
+                let mut previous = Vec::with_capacity(kernel.values.len());
 
-                        if previous.contains(op) {
-                            Some(value_id)
-                        } else {
-                            None
-                        }
-                    })
-                };
+                let duplicates = iter_values(&kernel, |op, value_id| {
+                    if !op.read_only(kernel) {
+                        return None;
+                    }
+
+                    let is_contained = previous.contains(op);
+
+                    previous.push(*op);
+
+                    if is_contained
+                        && kernel.values[value_id].dtype == dtype
+                        && kernel.values[value_id].state != ValueState::Mut
+                    {
+                        Some(value_id)
+                    } else {
+                        None
+                    }
+                });
+
+                if duplicates.len() != 0 && matches!(kernel.values[value_id].state, ValueState::Immut) {
+                    let scopes = enumerate_scopes(kernel)?;
+
+                    // redefine(kernel, value_id, &duplicates, &scopes)?;
+                }
 
                 for duplicate in duplicates {
-                    if let Some(duplicate_op) = &mut kernel.values[duplicate].init {
-                        duplicate_op.replace_usage(duplicate, value_id);
+                    for value in &mut kernel.values {
+                        if let Some(op) = &mut value.init {
+                           op.replace_usage(duplicate, value_id);
+                        }
+                    }
+
+                    for op in &mut kernel.ops {
+                        op.replace_usage(duplicate, value_id);
                     }
                 }
+
+                value_id += 1;
             }
         }
-        */
+
+        // if options.opt.flags.contains(OptFlags::LOOP_STATELESS) {}
+
+        // if options.opt.flags.contains(OptFlags::EMPTY_SCOPE) {}
+
+        // if options.opt.flags.contains(OptFlags::LATE_INIT) {}
 
         kernel.ops = erase_nops(&kernel.ops);
     }
 
     dead_code_elimination(kernel, options);
+
+    Ok(())
 }
 
+#[inline]
+fn enumerate_scopes(kernel: &RawKernel) -> Result<Vec<Range<usize>>, Error> {
+    let mut current_scope = 0_i32;
+    let mut scopes = vec![Range::from(0..kernel.ops.len())];
+
+    for (op_id, op) in kernel.ops.iter().enumerate() {
+        match op {
+            Op::ForeverLoopBegin
+            | Op::ForLoopBegin { .. }
+            | Op::StartScope
+            | Op::IfBegin { .. } => {
+                current_scope += 1;
+                scopes.push(Range { start: op_id, end: 0, })
+            }
+            Op::EndScope => {
+                current_scope -= 1;
+                if let Some(current_scope) = scopes.iter().rev().position(|scope| scope.end == 0) {
+                    scopes[current_scope].end = op_id;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if current_scope != 0 {
+        Err(Error {
+            msg: "kernel IR contains invalid scope data",
+            kind: ErrorKind::InternalError,
+            ctx: (),
+        })
+    } else {
+        Ok(scopes)
+    }
+}
+
+#[inline]
 fn dead_code_elimination<B: GpuBackend>(kernel: &mut RawKernel, options: &CompilationOptions<B>) {
     if options.opt.flags.contains(OptFlags::DEAD_CODE) {
         for value_id in 0..kernel.values.len() {
@@ -223,7 +287,7 @@ fn dead_code_elimination<B: GpuBackend>(kernel: &mut RawKernel, options: &Compil
             }
 
             if !any_ops(kernel, |op| {
-                op.does_read(value_id) && !op.does_write(value_id)
+                op.does_read(value_id) && !op.does_mutate(value_id)
             }) {
                 kernel.values[value_id].state = ValueState::Masked;
                 erase_writes(kernel, value_id);
@@ -232,10 +296,15 @@ fn dead_code_elimination<B: GpuBackend>(kernel: &mut RawKernel, options: &Compil
     }
 }
 
+#[inline]
 fn iter_values<R>(kernel: &RawKernel, mut f: impl FnMut(&Op, ValueId) -> Option<R>) -> Vec<R> {
     let mut value_ids = Vec::new();
 
     for value_id in 0..kernel.values.len() {
+        if kernel.values[value_id].state == ValueState::Masked {
+            continue;
+        }
+
         if let Some(op) = &kernel.values[value_id].init
             && let Some(value) = f(op, value_id)
         {
@@ -246,6 +315,7 @@ fn iter_values<R>(kernel: &RawKernel, mut f: impl FnMut(&Op, ValueId) -> Option<
     value_ids
 }
 
+#[inline]
 fn any_ops(kernel: &RawKernel, mut f: impl FnMut(&Op) -> bool) -> bool {
     for op in &kernel.ops {
         if f(op) {
@@ -264,6 +334,7 @@ fn any_ops(kernel: &RawKernel, mut f: impl FnMut(&Op) -> bool) -> bool {
     false
 }
 
+#[inline]
 fn erase_writes(kernel: &mut RawKernel, value_id: ValueId) {
     for op in &mut kernel.ops {
         if op.does_write(value_id) {
@@ -272,6 +343,7 @@ fn erase_writes(kernel: &mut RawKernel, value_id: ValueId) {
     }
 }
 
+#[inline]
 fn erase_nops(ops: &[Op]) -> Vec<Op> {
     let mut new_ops = Vec::new();
 
@@ -312,6 +384,7 @@ macro_rules! const_fold_op {
     }};
 }
 
+#[inline]
 fn const_fold(kernel: &mut RawKernel, value_id: ValueId) {
     use core::ops::{Add, Div, Mul, Shl, Shr, Sub};
 
@@ -357,6 +430,7 @@ fn const_fold(kernel: &mut RawKernel, value_id: ValueId) {
     }
 }
 
+#[inline]
 fn identity(kernel: &mut RawKernel, value_id: ValueId) {
     if let Some(init) = kernel.values[value_id].init {
         match init {
@@ -399,4 +473,173 @@ fn identity(kernel: &mut RawKernel, value_id: ValueId) {
             _ => {}
         }
     }
+}
+
+macro_rules! impl_op_assign {
+    (@var $kernel:ident, $op_id:ident, $id:ident, $value:ident, $($inline:ident => $assign:ident),*) => {
+        match $value.init {
+            $(
+                Some(Op::$inline { a, b }) => if a == $id {
+                    $kernel.ops[$op_id] = Op::$assign { $id, val: b }
+                } else if b == $id {
+                    $kernel.ops[$op_id] = Op::$assign { $id, val: a }
+                }
+            )*
+            _ => {}
+        }
+    };
+
+    (@param $load:ident, $kernel:ident, $op_id:ident, $param:ident, $index:ident, $value:ident, $($inline:ident => $assign:ident),*) => {
+        match $value.init {
+            $(
+                Some(Op::$inline { a, b }) => if $kernel.values[a].init == Some(Op::$load { $param, $index }) {
+                    $kernel.ops[$op_id] = Op::$assign { $param, $index, value: b }
+                } else if $kernel.values[b].init == Some(Op::$load { $param, $index }) {
+                    $kernel.ops[$op_id] = Op::$assign { $param, $index, value: a }
+                }
+            )*
+            _ => {}
+        }
+    };
+}
+
+#[inline]
+fn op_assign(kernel: &mut RawKernel) {
+    for op_id in 0..kernel.ops.len() {
+        if let Op::OverwriteVar { id, val } = kernel.ops[op_id] {
+            let value = &mut kernel.values[val];
+
+            if value.state == ValueState::Inline {
+                impl_op_assign!(
+                    @var
+                    kernel,
+                    op_id,
+                    id,
+                    value,
+                    Add => AddAssign,
+                    Sub => SubAssign,
+                    Mul => MulAssign,
+                    Div => DivAssign,
+                    Shr => ShrAssign,
+                    Shl => ShlAssign
+                );
+            }
+        }
+
+        if let Op::ParamStore { param, index, value } = kernel.ops[op_id] {
+            let value = &mut kernel.values[value];
+
+            if value.state == ValueState::Inline {
+                impl_op_assign!(
+                    @param
+                    ParamLoad,
+                    kernel,
+                    op_id,
+                    param,
+                    index,
+                    value,
+                    Add => ParamAccum,
+                    Sub => ParamSub,
+                    Mul => ParamMul,
+                    Div => ParamDiv,
+                    Shr => ParamShr,
+                    Shl => ParamShl
+                );
+            }
+        }
+
+        if let Op::SharedStore { mem, index, value } = kernel.ops[op_id] {
+            let value = &mut kernel.values[value];
+
+            if value.state == ValueState::Inline {
+                impl_op_assign!(
+                    @param
+                    SharedLoad,
+                    kernel,
+                    op_id,
+                    mem,
+                    index,
+                    value,
+                    Add => SharedAccum,
+                    Sub => SharedSub,
+                    Mul => SharedMul,
+                    Div => SharedDiv,
+                    Shr => SharedShr,
+                    Shl => SharedShl
+                );
+            }
+        }
+    }
+}
+
+#[inline]
+fn redefine(kernel: &mut RawKernel, value_id: ValueId, duplicates: &[ValueId], scopes: &[Range<usize>]) -> Result<(), Error> {
+    let mut val_def = None;
+    let mut duplicate_def = vec![None; duplicates.len()];
+
+    for (op_id, statement) in kernel.ops.iter_mut().enumerate() {
+        if *statement == (Op::DefineVar { id: value_id }) {
+            *statement = Op::Nop;
+            val_def = Some(op_id);
+            continue;
+        }
+
+        for (duplicate_id, def) in duplicate_def.iter_mut().enumerate() {
+            if *statement == (Op::DefineVar { id: duplicates[duplicate_id] }) {
+                *def = Some(op_id);
+                break;
+            }
+        }
+    }
+
+    let mut min_start = val_def.ok_or(Error {
+        msg: "no definition for unmasked variable",
+        kind: ErrorKind::InternalError,
+        ctx: (),
+    })?;
+    let mut max_end = min_start;
+
+    for def in duplicate_def {
+        let Some(id) = def else {
+            continue;
+        };
+
+        if id > max_end {
+            max_end = id;
+        }
+
+        if id < min_start {
+            min_start = id;
+        }
+    }
+
+    let mut iter_scopes = scopes.iter().enumerate().rev();
+
+    let (idx, scope) = loop {
+        let (idx, scope) = iter_scopes.next().ok_or(Error {
+            msg: "scope containing definitions not found",
+            kind: ErrorKind::InternalError,
+            ctx: (),
+        })?;
+
+        if scope.contains(&min_start) && scope.contains(&max_end) {
+            break (idx, scope);
+        }
+    };
+
+    let redef = if idx + 1 == scopes.len() {
+        scope.start
+    } else {
+        let next_scope = scopes[idx + 1].start;
+
+        if next_scope > min_start {
+            scope.start
+        } else {
+            next_scope
+        }
+    };
+
+    kernel.ops.insert(redef, Op::DefineVar { id: value_id });
+
+    Ok(())
 }
