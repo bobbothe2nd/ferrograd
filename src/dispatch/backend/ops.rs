@@ -1,4 +1,6 @@
-use crate::dispatch::backend::{Axis, MetaId, ParamId, SharedId, ValueId, ValueState, kernel::RawKernel};
+use crate::dispatch::backend::{
+    Axis, MetaId, ParamId, SharedId, ValueId, ValueState, kernel::RawKernel,
+};
 
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -503,6 +505,7 @@ impl Op {
     }
 
     #[inline]
+    #[must_use]
     pub fn read_only(&self, kernel: &RawKernel) -> bool {
         #[inline]
         fn not_mut(value_id: ValueId, kernel: &RawKernel) -> bool {
@@ -538,22 +541,20 @@ impl Op {
             | Self::Pow { a, b }
             | Self::Sub { a, b }
             | Self::Shl { a, b }
-            | Self::Shr { a, b } => not_mut(*a, kernel)
-                && not_mut(*b, kernel),
-            Self::Fma { a, b, c } => not_mut(*a, kernel)
-                && not_mut(*b, kernel)
-                && not_mut(*c, kernel),
+            | Self::Shr { a, b } => not_mut(*a, kernel) && not_mut(*b, kernel),
+            Self::Fma { a, b, c } => {
+                not_mut(*a, kernel) && not_mut(*b, kernel) && not_mut(*c, kernel)
+            }
             Self::AddAssign { val, id }
             | Self::DivAssign { val, id }
             | Self::MulAssign { val, id }
             | Self::ShlAssign { val, id }
             | Self::ShrAssign { val, id }
             | Self::SubAssign { val, id }
-            | Self::OverwriteVar { val, id } => not_mut(*val, kernel)
-                && not_mut(*id, kernel),
-            Self::ForLoopBegin { index, end, step } => not_mut(*index, kernel)
-                && not_mut(*end, kernel)
-                && not_mut(*step, kernel),
+            | Self::OverwriteVar { val, id } => not_mut(*val, kernel) && not_mut(*id, kernel),
+            Self::ForLoopBegin { index, end, step } => {
+                not_mut(*index, kernel) && not_mut(*end, kernel) && not_mut(*step, kernel)
+            }
             Self::IfBegin { cond } => not_mut(*cond, kernel),
             Self::ParamAccum { index, value, .. }
             | Self::ParamDiv { index, value, .. }
@@ -568,12 +569,15 @@ impl Op {
             | Self::SharedShl { index, value, .. }
             | Self::SharedShr { index, value, .. }
             | Self::SharedStore { index, value, .. }
-            | Self::SharedSub { index, value, .. } => not_mut(*index, kernel)
-                && not_mut(*value, kernel),
-            Self::ParamLoad { index, .. } | Self::SharedLoad { index, .. } => not_mut(*index, kernel),
-            Self::Select { cond, a, b } => not_mut(*cond, kernel)
-                && not_mut(*a, kernel)
-                && not_mut(*b, kernel),
+            | Self::SharedSub { index, value, .. } => {
+                not_mut(*index, kernel) && not_mut(*value, kernel)
+            }
+            Self::ParamLoad { index, .. } | Self::SharedLoad { index, .. } => {
+                not_mut(*index, kernel)
+            }
+            Self::Select { cond, a, b } => {
+                not_mut(*cond, kernel) && not_mut(*a, kernel) && not_mut(*b, kernel)
+            }
             Self::Barrier
             | Self::BlockId { .. }
             | Self::Break
@@ -592,7 +596,7 @@ impl Op {
             | Self::ReadMeta { .. }
             | Self::Return
             | Self::Nop
-            | Self::StartScope => false
+            | Self::StartScope => false,
         }
     }
 

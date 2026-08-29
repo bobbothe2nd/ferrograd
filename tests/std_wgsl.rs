@@ -163,6 +163,7 @@ fn matmul_sub_softmax_forward_backward() {
     let grad_tensors = &saved_tensors.grad_tensors;
 
     ctx.download(out_tensor, &mut dst).unwrap();
+    std::eprintln!("{:?}", &dst[..64]);
     let download = &dst[..1024];
     assert!(download.iter().all(|x| *x == 1.0 / 64.0));
 

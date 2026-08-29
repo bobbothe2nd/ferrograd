@@ -64,12 +64,12 @@ pub struct NopGpuContext;
 
 impl NopGpuContext {
     #[allow(clippy::unused_async)]
-    pub async fn new() -> Result<Self, Error> {
-        Err(Error {
+    pub fn new() -> impl Future<Output = Result<Self, Error>> {
+        core::future::ready(Err(Error {
             msg: "using nop backend",
             kind: ErrorKind::UnsupportedFeature,
             ctx: (),
-        })
+        }))
     }
 }
 

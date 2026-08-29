@@ -1,12 +1,17 @@
-use core::range::Range;
+use crate::{
+    dispatch::{
+        CompilationOptions, GpuBackend, OptFlags,
+        backend::{DType, Op, ValueId, ValueState, kernel::RawKernel},
+    },
+    errors::Error,
+};
+use alloc::vec::Vec;
 
-use crate::{dispatch::{
-    CompilationOptions, GpuBackend, OptFlags,
-    backend::{DType, Op, ValueId, ValueState, kernel::RawKernel},
-}, errors::{Error, ErrorKind}};
-use alloc::{vec, vec::Vec};
-
-pub fn optimize<B: GpuBackend>(kernel: &mut RawKernel, options: &CompilationOptions<B>) -> Result<(), Error> {
+#[allow(clippy::unnecessary_wraps)]
+pub fn optimize<B: GpuBackend>(
+    kernel: &mut RawKernel,
+    options: &CompilationOptions<B>,
+) -> Result<(), Error> {
     for _ in 0..options.opt.passes {
         dead_code_elimination(kernel, options);
 
@@ -28,7 +33,7 @@ pub fn optimize<B: GpuBackend>(kernel: &mut RawKernel, options: &CompilationOpti
 
         if options.opt.flags.contains(OptFlags::MUL_ADD) {
             for value_id in 0..kernel.values.len() {
-                if kernel.values[value_id].state == ValueState::Masked 
+                if kernel.values[value_id].state == ValueState::Masked
                     || !matches!(
                         kernel.values[value_id].dtype,
                         DType::F32 | DType::F16 | DType::BF16
@@ -55,7 +60,7 @@ pub fn optimize<B: GpuBackend>(kernel: &mut RawKernel, options: &CompilationOpti
             }
 
             let additions = iter_values(kernel, |op, value_id| {
-                if kernel.values[value_id].state == ValueState::Masked 
+                if kernel.values[value_id].state == ValueState::Masked
                     || !matches!(
                         kernel.values[value_id].dtype,
                         DType::F32 | DType::F16 | DType::BF16
@@ -92,7 +97,7 @@ pub fn optimize<B: GpuBackend>(kernel: &mut RawKernel, options: &CompilationOpti
 
         if options.opt.flags.contains(OptFlags::DIV_CONST) {
             let divisions = iter_values(kernel, |op, value_id| {
-                if kernel.values[value_id].state == ValueState::Masked 
+                if kernel.values[value_id].state == ValueState::Masked
                     || !matches!(
                         kernel.values[value_id].dtype,
                         DType::F32 | DType::F16 | DType::BF16
@@ -145,16 +150,17 @@ pub fn optimize<B: GpuBackend>(kernel: &mut RawKernel, options: &CompilationOpti
 
         if options.opt.flags.contains(OptFlags::COPY_IMMUT) {
             for value_id in 0..kernel.values.len() {
-                if !matches!(kernel.values[value_id].state, ValueState::Inline | ValueState::Immut) {
+                if !matches!(
+                    kernel.values[value_id].state,
+                    ValueState::Inline | ValueState::Immut
+                ) {
                     continue;
                 }
 
                 let copy_op = Op::CopyVar { id: value_id };
 
-                let copies = iter_values(&kernel, |op, value_id| {
-                    if op == &copy_op
-                        && kernel.values[value_id].state != ValueState::Mut
-                    {
+                let copies = iter_values(kernel, |op, value_id| {
+                    if op == &copy_op && kernel.values[value_id].state != ValueState::Mut {
                         Some(value_id)
                     } else {
                         None
@@ -164,7 +170,7 @@ pub fn optimize<B: GpuBackend>(kernel: &mut RawKernel, options: &CompilationOpti
                 for copy_id in copies {
                     for value in &mut kernel.values {
                         if let Some(op) = &mut value.init {
-                           op.replace_usage(copy_id, value_id);
+                            op.replace_usage(copy_id, value_id);
                         }
                     }
 
@@ -172,60 +178,6 @@ pub fn optimize<B: GpuBackend>(kernel: &mut RawKernel, options: &CompilationOpti
                         op.replace_usage(copy_id, value_id);
                     }
                 }
-            }
-        }
-
-        if options.opt.flags.contains(OptFlags::DUPLICATE_IMMUT) {
-            let mut value_id = 0;
-
-            while value_id < kernel.values.len() {
-                if !matches!(kernel.values[value_id].state, ValueState::Inline | ValueState::Immut) {
-                    value_id += 1;
-                    continue;
-                }
-
-                let dtype = kernel.values[value_id].dtype;
-
-                let mut previous = Vec::with_capacity(kernel.values.len());
-
-                let duplicates = iter_values(&kernel, |op, value_id| {
-                    if !op.read_only(kernel) {
-                        return None;
-                    }
-
-                    let is_contained = previous.contains(op);
-
-                    previous.push(*op);
-
-                    if is_contained
-                        && kernel.values[value_id].dtype == dtype
-                        && kernel.values[value_id].state != ValueState::Mut
-                    {
-                        Some(value_id)
-                    } else {
-                        None
-                    }
-                });
-
-                if duplicates.len() != 0 && matches!(kernel.values[value_id].state, ValueState::Immut) {
-                    let scopes = enumerate_scopes(kernel)?;
-
-                    // redefine(kernel, value_id, &duplicates, &scopes)?;
-                }
-
-                for duplicate in duplicates {
-                    for value in &mut kernel.values {
-                        if let Some(op) = &mut value.init {
-                           op.replace_usage(duplicate, value_id);
-                        }
-                    }
-
-                    for op in &mut kernel.ops {
-                        op.replace_usage(duplicate, value_id);
-                    }
-                }
-
-                value_id += 1;
             }
         }
 
@@ -241,41 +193,6 @@ pub fn optimize<B: GpuBackend>(kernel: &mut RawKernel, options: &CompilationOpti
     dead_code_elimination(kernel, options);
 
     Ok(())
-}
-
-#[inline]
-fn enumerate_scopes(kernel: &RawKernel) -> Result<Vec<Range<usize>>, Error> {
-    let mut current_scope = 0_i32;
-    let mut scopes = vec![Range::from(0..kernel.ops.len())];
-
-    for (op_id, op) in kernel.ops.iter().enumerate() {
-        match op {
-            Op::ForeverLoopBegin
-            | Op::ForLoopBegin { .. }
-            | Op::StartScope
-            | Op::IfBegin { .. } => {
-                current_scope += 1;
-                scopes.push(Range { start: op_id, end: 0, })
-            }
-            Op::EndScope => {
-                current_scope -= 1;
-                if let Some(current_scope) = scopes.iter().rev().position(|scope| scope.end == 0) {
-                    scopes[current_scope].end = op_id;
-                }
-            }
-            _ => {}
-        }
-    }
-
-    if current_scope != 0 {
-        Err(Error {
-            msg: "kernel IR contains invalid scope data",
-            kind: ErrorKind::InternalError,
-            ctx: (),
-        })
-    } else {
-        Ok(scopes)
-    }
 }
 
 #[inline]
@@ -526,7 +443,12 @@ fn op_assign(kernel: &mut RawKernel) {
             }
         }
 
-        if let Op::ParamStore { param, index, value } = kernel.ops[op_id] {
+        if let Op::ParamStore {
+            param,
+            index,
+            value,
+        } = kernel.ops[op_id]
+        {
             let value = &mut kernel.values[value];
 
             if value.state == ValueState::Inline {
@@ -570,76 +492,4 @@ fn op_assign(kernel: &mut RawKernel) {
             }
         }
     }
-}
-
-#[inline]
-fn redefine(kernel: &mut RawKernel, value_id: ValueId, duplicates: &[ValueId], scopes: &[Range<usize>]) -> Result<(), Error> {
-    let mut val_def = None;
-    let mut duplicate_def = vec![None; duplicates.len()];
-
-    for (op_id, statement) in kernel.ops.iter_mut().enumerate() {
-        if *statement == (Op::DefineVar { id: value_id }) {
-            *statement = Op::Nop;
-            val_def = Some(op_id);
-            continue;
-        }
-
-        for (duplicate_id, def) in duplicate_def.iter_mut().enumerate() {
-            if *statement == (Op::DefineVar { id: duplicates[duplicate_id] }) {
-                *def = Some(op_id);
-                break;
-            }
-        }
-    }
-
-    let mut min_start = val_def.ok_or(Error {
-        msg: "no definition for unmasked variable",
-        kind: ErrorKind::InternalError,
-        ctx: (),
-    })?;
-    let mut max_end = min_start;
-
-    for def in duplicate_def {
-        let Some(id) = def else {
-            continue;
-        };
-
-        if id > max_end {
-            max_end = id;
-        }
-
-        if id < min_start {
-            min_start = id;
-        }
-    }
-
-    let mut iter_scopes = scopes.iter().enumerate().rev();
-
-    let (idx, scope) = loop {
-        let (idx, scope) = iter_scopes.next().ok_or(Error {
-            msg: "scope containing definitions not found",
-            kind: ErrorKind::InternalError,
-            ctx: (),
-        })?;
-
-        if scope.contains(&min_start) && scope.contains(&max_end) {
-            break (idx, scope);
-        }
-    };
-
-    let redef = if idx + 1 == scopes.len() {
-        scope.start
-    } else {
-        let next_scope = scopes[idx + 1].start;
-
-        if next_scope > min_start {
-            scope.start
-        } else {
-            next_scope
-        }
-    };
-
-    kernel.ops.insert(redef, Op::DefineVar { id: value_id });
-
-    Ok(())
 }

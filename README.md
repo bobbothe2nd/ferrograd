@@ -106,10 +106,9 @@ state.encode().submit().sync();
 
 let mut dst = [0_f32; 1024];
 
-let out_tensor = &saved_tensors.forward_out;
 let grad_tensors = &saved_tensors.grad_tensors;
 
-ctx.download(out_tensor, &mut dst).unwrap();
+ctx.download(&saved_tensors.forward_out, &mut dst).unwrap();
 assert!(dst.iter().all(|x| *x == 7.0));
 
 ctx.download(&grad_tensors[0], &mut dst).unwrap();
@@ -129,6 +128,28 @@ assert!(dst.iter().all(|x| *x == 2.0 - 3e-3));
 
 ctx.download(&in_tensors[2], &mut dst).unwrap();
 assert!(dst.iter().all(|x| *x == 1.0 - 1e-3));
+
+// intentionally incorrect target (4 != 7) to produce meaningful gradients
+let target = ctx.init_tensor_f32(&[32, 32], &[4.0; 1024]);
+
+// or dispatch with loss
+let mut state = ctx.prepare_batch();
+
+{
+    let mut pass = ctx.start_batch(&mut state);
+
+    pass.dispatch_forward(&schedule);
+    pass.dispatch_loss(&schedule, &target);
+    pass.dispatch_backward(&schedule);
+
+    // all grads are zero including seed
+    pass.dispatch_optim::<0>(&mut schedule, &in_tensors[0], 0, &saved_tensors);
+    pass.dispatch_optim::<0>(&mut schedule, &in_tensors[1], 1, &saved_tensors);
+    pass.dispatch_optim::<0>(&mut schedule, &in_tensors[2], 2, &saved_tensors);
+}
+
+// launch and synchronize batch output
+state.encode().submit().sync();
 ```
 
 Also supports `f16` and `bf16` on most backends. These are re-exported from `half` in the `tensors` module.

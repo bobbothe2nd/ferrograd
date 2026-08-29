@@ -160,15 +160,10 @@ bitflags::bitflags! {
         /// `let a = 123; let b = a; let c = b - 1;` -> `let a = 123; let c = a - 1;`
         const COPY_IMMUT = 1 << 9;
 
-        /// Removes duplicate immutable variables, moving them to the smallest scope that encompasses both.
-        ///
-        /// `let a = 1 + 1 + 1; let b = 1 + 1 + 2;` -> `let two = 1 + 1; let a = two + 1; let b = two + 2;`
-        const DUPLICATE_IMMUT = 1 << 10;
-
         /// Removes needless late intialization of mutable variables.
         ///
         /// `let mut a; a = 2;` -> `let mut a = 2;`
-        const LATE_INIT = 1 << 11;
+        const LATE_INIT = 1 << 10;
     }
 }
 
@@ -805,8 +800,12 @@ impl<B: GpuBackend> Batcher<'_, B> {
             .dispatch_schedule(&mut self.0, &schedule.backward);
     }
 
-    pub fn dispatch_loss<'a>(&mut self, schedule: &mut Schedule<'a, B>, target: &'a Tensor<B>) {
-        schedule.loss.bindings[4] = &target.data.inner;
+    pub fn dispatch_loss<'a, T: ToBuffer<B>>(
+        &mut self,
+        schedule: &mut Schedule<'a, B>,
+        target: &'a T,
+    ) {
+        schedule.loss.bindings[4] = target.as_buffer();
 
         self.1.inner.dispatch_kernel(
             &mut self.0,

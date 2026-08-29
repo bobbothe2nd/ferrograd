@@ -562,8 +562,6 @@ fn generate_wgsl(
 
     emit_entry(kernel, &mut out, pretty_print)?;
 
-    std::println!("{out}\n");
-
     Ok(out)
 }
 
