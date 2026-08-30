@@ -10,7 +10,7 @@ use crate::{
     errors::{Error, ErrorKind},
     tensor::{ToBuffer, build_dims, calc_grid},
 };
-use alloc::{string::String, vec::Vec};
+use std::{string::String, vec::Vec};
 use briny::raw::cast::cast_slice;
 use core::{fmt::Write, num::NonZeroU64, str::FromStr};
 use wgpu::{
@@ -173,7 +173,7 @@ impl GpuBackend for GpuContext {
     fn alloc_meta(&self, data: &[u32]) -> Self::Buffer {
         let offset = (4 - (data.len() % 4)) % 4;
         let new_len = data.len() + offset;
-        let mut aligned = alloc::vec![u32::MAX; new_len];
+        let mut aligned = std::vec![u32::MAX; new_len];
         aligned[..data.len()].copy_from_slice(data);
 
         GpuBuffer(self.device.create_buffer_init(&BufferInitDescriptor {
@@ -577,6 +577,7 @@ const fn get_axis(axis: Axis) -> &'static str {
 #[inline]
 const fn get_dtype(dtype: DType) -> Result<&'static str, Error> {
     match dtype {
+        DType::F64 => Ok("f64"),
         DType::F32 => Ok("f32"),
         DType::F16 => Ok("f16"),
         DType::BF16 => Err(Error {
@@ -793,6 +794,10 @@ fn process_op(
 
         Op::CopyVar { id } => {
             let _ = out.write_str(&render_val(*id, kernel)?);
+        }
+
+        Op::ConstF64 { value } => {
+            let _ = write!(out, "{value}d");
         }
 
         Op::ConstF32 { value } => {
@@ -1029,6 +1034,10 @@ fn process_op(
 
         Op::Not { cond } => {
             let _ = write!(out, "!({})", render_val(*cond, kernel)?);
+        }
+
+        Op::CastF64 { id } => {
+            let _ = write!(out, "f64({})", render_val(*id, kernel)?);
         }
 
         Op::CastF32 { id } => {

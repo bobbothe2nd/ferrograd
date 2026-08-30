@@ -8,7 +8,7 @@ use crate::{
     errors::Error,
     tensor::{Tensor, ToBuffer, build_dims},
 };
-use alloc::{vec, vec::Vec};
+use std::{vec, vec::Vec};
 use briny::{
     raw::cast::{slice_to_bytes, slice_to_bytes_mut},
     traits::Pod,

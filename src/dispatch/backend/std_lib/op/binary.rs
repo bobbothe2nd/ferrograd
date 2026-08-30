@@ -9,7 +9,7 @@ use crate::{
     },
     errors::{Error, ErrorKind, GraphErrorContext},
 };
-use alloc::{format, vec, vec::Vec};
+use std::{format, vec, vec::Vec};
 
 fn valid_binary<'a, B: GpuBackend>(
     node_id: NodeId,

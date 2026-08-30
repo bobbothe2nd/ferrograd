@@ -8,7 +8,7 @@ use crate::{
     },
     errors::{Error, ErrorKind, GraphErrorContext},
 };
-use alloc::{vec, vec::Vec};
+use std::{vec, vec::Vec};
 
 mod forward;
 

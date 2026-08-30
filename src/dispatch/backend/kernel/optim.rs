@@ -8,7 +8,7 @@ use crate::{
     },
     errors::Error,
 };
-use alloc::{vec, vec::Vec};
+use std::{vec, vec::Vec};
 
 #[inline]
 pub fn lower_optim<B: GpuBackend>(graph: &Graph<B>, meta: Metadata) -> Result<Kernel, Error> {

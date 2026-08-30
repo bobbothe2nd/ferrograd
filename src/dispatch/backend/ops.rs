@@ -42,6 +42,9 @@ pub enum Op {
         id: ValueId,
     },
 
+    ConstF64 {
+        value: f64,
+    },
     ConstF32 {
         value: f32,
     },
@@ -257,6 +260,10 @@ pub enum Op {
         b: ValueId,
     },
 
+    CastF64 {
+        id: ValueId,
+    },
+
     CastF32 {
         id: ValueId,
     },
@@ -318,6 +325,7 @@ impl Op {
             Self::Barrier
             | Self::BlockId { .. }
             | Self::Break
+            | Self::ConstF64 { .. }
             | Self::ConstF32 { .. }
             | Self::ConstF16 { .. }
             | Self::ConstBf16 { .. }
@@ -342,6 +350,7 @@ impl Op {
             | Self::Tanh { x }
             | Self::Not { cond: x }
             | Self::CopyVar { id: x }
+            | Self::CastF64 { id: x }
             | Self::CastF32 { id: x }
             | Self::CastF16 { id: x }
             | Self::CastBF16 { id: x }
@@ -412,6 +421,7 @@ impl Op {
             | Self::Sqrt { x }
             | Self::Tanh { x }
             | Self::Not { cond: x }
+            | Self::CastF64 { id: x }
             | Self::CastF32 { id: x }
             | Self::CastF16 { id: x }
             | Self::CastBF16 { id: x }
@@ -485,6 +495,7 @@ impl Op {
             Self::Barrier
             | Self::BlockId { .. }
             | Self::Break
+            | Self::ConstF64 { .. }
             | Self::ConstF32 { .. }
             | Self::ConstF16 { .. }
             | Self::ConstBf16 { .. }
@@ -521,6 +532,7 @@ impl Op {
             | Self::Sqrt { x }
             | Self::Tanh { x }
             | Self::Not { cond: x }
+            | Self::CastF64 { id: x }
             | Self::CastF32 { id: x }
             | Self::CastF16 { id: x }
             | Self::CastBF16 { id: x }
@@ -581,6 +593,7 @@ impl Op {
             Self::Barrier
             | Self::BlockId { .. }
             | Self::Break
+            | Self::ConstF64 { .. }
             | Self::ConstF32 { .. }
             | Self::ConstF16 { .. }
             | Self::ConstBf16 { .. }

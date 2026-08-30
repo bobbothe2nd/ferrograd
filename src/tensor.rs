@@ -2,7 +2,7 @@
 //!
 //! For more information, see [`Tensor`].
 
-use alloc::vec::Vec;
+use std::vec::Vec;
 
 use crate::dispatch::{GpuBackend, GpuBuffer, backend::MetaId};
 
@@ -57,6 +57,8 @@ pub trait ToBuffer<B: GpuBackend> {
 }
 
 /// Core compute storage primitive.
+///
+/// The `PartialEq` implementation on this only compares shapes.
 ///
 /// Actively used in all computations, attaching a shape to the generic (and low-level) [`GpuBuffer`].
 ///
@@ -118,6 +120,8 @@ impl<B: GpuBackend> Tensor<B> {
     /// Returns the exact length of the data.
     ///
     /// This will always be equal to `.dims().product()`, only it uses a much faster method by directly checking the length of the buffer.
+    ///
+    /// This is only correct for `f32` or `u32`. Other sizes (e.g. `f16`/`bf16`/`f64`) are not correct.
     #[inline]
     #[must_use]
     pub fn len(&self) -> u32 {

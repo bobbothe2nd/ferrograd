@@ -1,4 +1,4 @@
-use alloc::{string::String, vec, vec::Vec};
+use std::{string::String, vec, vec::Vec};
 use core::{cmp::Ordering, fmt::Debug};
 
 use crate::{
@@ -197,6 +197,7 @@ pub type ValueId = usize;
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DType {
+    F64,
     F32,
     F16,
     BF16,
@@ -213,6 +214,7 @@ impl DType {
             Self::Bool => 8,
             Self::BF16 | Self::F16 => 16,
             Self::F32 | Self::I32 | Self::U32 => 32,
+            Self::F64 => 64,
         }
     }
 
@@ -223,6 +225,7 @@ impl DType {
             Self::Bool => 1,
             Self::BF16 | Self::F16 => 2,
             Self::F32 | Self::I32 | Self::U32 => 4,
+            Self::F64 => 8,
         }
     }
 
@@ -254,6 +257,7 @@ impl DType {
                 value: half::f16::MIN,
             }),
             Self::F32 => Ok(Op::ConstF32 { value: f32::MIN }),
+            Self::F64 => Ok(Op::ConstF64 { value: f64::MIN }),
             Self::I32 => Ok(Op::ConstI32 { value: i32::MIN }),
             Self::U32 => Ok(Op::ConstU32 { value: u32::MIN }),
             Self::Bool => Err(Error {
@@ -274,6 +278,7 @@ impl DType {
                 value: half::f16::MAX,
             }),
             Self::F32 => Ok(Op::ConstF32 { value: f32::MAX }),
+            Self::F64 => Ok(Op::ConstF64 { value: f64::MAX }),
             Self::I32 => Ok(Op::ConstI32 { value: i32::MAX }),
             Self::U32 => Ok(Op::ConstU32 { value: u32::MAX }),
             Self::Bool => Err(Error {

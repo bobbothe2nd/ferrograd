@@ -1,10 +1,10 @@
 //! Safe error handling for all possibilities.
 
-use crate::dispatch::{
+use crate::{dispatch::{
     GpuBackend,
     backend::{GpuContext, GraphOp, MetaId, NodeId},
-};
-use alloc::vec::Vec;
+}, io::SerialTensorError};
+use std::vec::Vec;
 use core::{
     error::Error as CoreError,
     fmt::{Debug, Display, Formatter, Result},
@@ -43,11 +43,19 @@ impl Display for Error {
     }
 }
 
-impl<B: GpuBackend + Clone> Display for Error<GraphErrorContext<'_, B>> {
+impl<B: GpuBackend> Display for Error<GraphErrorContext<'_, B>> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         debug_assert_eq!(self.kind, ErrorKind::ComputeGraphError);
 
-        write!(f, "{}: {}", self.msg, self.ctx)
+        write!(f, "{}: {}, {}", self.kind, self.msg, self.ctx)
+    }
+}
+
+impl Display for Error<SerialTensorError> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        debug_assert_eq!(self.kind, ErrorKind::ComputeGraphError);
+
+        write!(f, "{}: {}, {}", self.kind, self.msg, self.ctx)
     }
 }
 
@@ -99,6 +107,7 @@ pub enum ErrorKind {
     FailedEventCreation,
     FailedInfoQuery,
     InternalError,
+    SerializationError,
 }
 
 impl Display for ErrorKind {
@@ -125,6 +134,7 @@ impl Display for ErrorKind {
             Self::SyncError => write!(f, "synchronization error"),
             Self::WaitFailed => write!(f, "wait failed"),
             Self::UnresolvedRedirection => write!(f, "unresolved redirection"),
+            Self::SerializationError => write!(f, "serialization or I/O error"),
             Self::InternalError => write!(f, "internal error (maybe report bug)"),
         }
     }
@@ -183,7 +193,7 @@ pub enum GraphErrorContext<'a, B: GpuBackend = GpuContext> {
     },
 }
 
-impl<B: GpuBackend + Clone> Display for GraphErrorContext<'_, B> {
+impl<B: GpuBackend> Display for GraphErrorContext<'_, B> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         match self {
             Self::CycleDetected { node, path } => {

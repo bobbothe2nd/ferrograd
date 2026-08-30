@@ -11,7 +11,7 @@ use crate::{
     },
     errors::{Error, ErrorKind},
 };
-use alloc::{vec, vec::Vec};
+use std::{vec, vec::Vec};
 use core::cmp::Ordering;
 
 #[inline]

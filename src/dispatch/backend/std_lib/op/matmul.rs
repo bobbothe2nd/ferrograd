@@ -9,7 +9,7 @@ use crate::{
     },
     errors::{Error, ErrorKind, GraphErrorContext},
 };
-use alloc::{format, vec, vec::Vec};
+use std::{format, vec, vec::Vec};
 
 pub fn lower_matmul_recursive<'a, B: GpuBackend>(
     eval_node: impl Fn(

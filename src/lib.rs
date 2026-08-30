@@ -24,14 +24,13 @@
 #![forbid(clippy::unwrap_used)]
 #![forbid(clippy::expect_used)]
 #![forbid(clippy::panic)]
+#![forbid(clippy::std_instead_of_core)]
 #![forbid(unsafe_code)]
-#![no_std]
-
-extern crate alloc;
-
-extern crate std;
 
 pub mod dispatch;
+
+#[cfg(feature = "io")]
+pub mod io;
 
 pub mod errors;
 

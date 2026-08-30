@@ -5,7 +5,7 @@ use crate::{
     },
     errors::Error,
 };
-use alloc::vec::Vec;
+use std::vec::Vec;
 
 #[allow(clippy::unnecessary_wraps)]
 pub fn optimize<B: GpuBackend>(

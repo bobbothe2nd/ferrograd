@@ -10,7 +10,7 @@ use crate::{
     errors::{Error, ErrorKind, GraphErrorContext},
 };
 
-use alloc::{format, vec, vec::Vec};
+use std::{format, vec, vec::Vec};
 
 fn save_unary<B: GpuBackend>(
     _: NodeId,
