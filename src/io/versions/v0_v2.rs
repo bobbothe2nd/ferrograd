@@ -1,6 +1,6 @@
-use std::{fs::File, io::{BufWriter, Write}};
+use std::{fs::File, io::{BufReader, BufWriter, Read, Write}};
 
-use briny::{raw::cast::cast_slice, traits::Pod};
+use briny::{raw::cast::{slice_to_bytes, slice_to_bytes_mut}, traits::Pod};
 
 use crate::{dispatch::{GpuBackend, GpuContext}, errors::{Error, ErrorKind}, io::{SerialTensorError, headers::BPAT_MAGIC_V0}, tensor::Tensor};
 
@@ -60,10 +60,14 @@ fn save_tensors<const U: usize, F: Default + Pod + Clone, B: GpuBackend>(
     })?]);
 
     for t in tensors {
-        file.write(&(t.rank()).to_le_bytes()[..U]);
+        file.write(&(t.rank()).to_le_bytes()[..U]).map_err(|_| Error {
+            msg: "failed to write to file",
+            kind: ErrorKind::SerializationError,
+            ctx: SerialTensorError::FailedFileIo,
+        });
 
         let shape_u64 = t.shape.iter().map(|x| *x as u64).collect::<Vec<_>>();
-        file.write(cast_slice(&shape_u64));
+        file.write(slice_to_bytes(&shape_u64));
 
         let len = t.data.size_bytes() as usize / size_of::<F>();
 
@@ -83,8 +87,101 @@ fn save_tensors<const U: usize, F: Default + Pod + Clone, B: GpuBackend>(
             ctx: SerialTensorError::Unrelated,
         })?;
 
-        file.write(cast_slice(&buf));
+        file.write(slice_to_bytes(&buf));
     }
 
     Ok(())
 }
+
+macro_rules! impl_load {
+    ($name:ident, $name2:ident, $init:ident, $float:ident, $unsigned:ident) => {
+        #[inline(always)]
+        pub fn $name<B: GpuBackend>(
+            file: &mut BufReader<File>,
+            ctx: GpuContext<B>,
+        ) -> Result<Vec<Tensor<B>>, Error<SerialTensorError>> {
+            let mut len = [0];
+            file.read_exact(&mut len);
+            let len = u8::from_le_bytes(len) as usize;
+
+            let mut tensors = Vec::with_capacity(len);
+
+            for _ in 0..len {
+                let mut rank = [0; size_of::<$unsigned>()];
+                file.read_exact(&mut rank);
+                let rank = <$unsigned>::from_le_bytes(rank);
+
+                let mut shape = Vec::with_capacity(rank as usize);
+
+                for _ in 0..rank {
+                    let mut shape_u64 = [0; size_of::<$unsigned>()];
+                    file.read_exact(&mut shape_u64);
+                    shape.push(<$unsigned>::from_le_bytes(shape_u64) as u32);
+                }
+
+                let len = shape.iter().product::<u32>();
+
+                let mut data = vec![$float::default(); len as usize];
+
+                file.read_exact(slice_to_bytes_mut(&mut data)).map_err(|_| Error {
+                    msg: "unexpected EOF",
+                    kind: ErrorKind::SerializationError,
+                    ctx: SerialTensorError::FailedFileIo,
+                });
+
+                tensors.push(ctx.$init(shape, &data));
+            }
+
+            Ok(tensors)
+        }
+
+        #[inline(always)]
+        pub fn $name2<B: GpuBackend>(
+            file: &mut BufReader<File>,
+            ctx: GpuContext<B>,
+            tensors: &mut [Tensor<B>],
+        ) -> Result<(), Error<SerialTensorError>> {
+            let mut len = [0];
+            file.read_exact(&mut len);
+            let len = u8::from_le_bytes(len) as usize;
+
+            for tensor in tensors.iter_mut().take(len) {
+                let mut rank = [0; size_of::<$unsigned>()];
+                file.read_exact(&mut rank);
+                let rank = <$unsigned>::from_le_bytes(rank);
+
+                let mut shape = Vec::with_capacity(rank as usize);
+
+                for _ in 0..rank {
+                    let mut shape_u64 = [0; size_of::<$unsigned>()];
+                    file.read_exact(&mut shape_u64);
+                    shape.push(<$unsigned>::from_le_bytes(shape_u64) as u32);
+                }
+
+                let len = shape.iter().product::<u32>();
+
+                let mut data = vec![$float::default(); len as usize];
+
+                file.read_exact(slice_to_bytes_mut(&mut data)).map_err(|_| Error {
+                    msg: "unexpected EOF",
+                    kind: ErrorKind::SerializationError,
+                    ctx: SerialTensorError::FailedFileIo,
+                });
+
+                tensor.shape = shape;
+
+                ctx.upload(tensor, &data);
+            }
+
+            Ok(())
+        }
+    };
+}
+
+impl_load!(load_tensors_v0, load_into_tensors_v0, init_tensor_f64, f64, u64);
+
+use half::{bf16, f16};
+
+impl_load!(load_tensors_v2_bf16, load_into_tensors_v2_bf16, init_tensor_bf16, bf16, u32);
+impl_load!(load_tensors_v2_f16, load_into_tensors_v2_f16, init_tensor_f16, f16, u32);
+impl_load!(load_tensors_v2_f32, load_into_tensors_v2_f32, init_tensor_f32, f32, u32);

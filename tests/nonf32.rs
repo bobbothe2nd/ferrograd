@@ -36,9 +36,9 @@ fn mul_add_f16() {
     let kernels = ctx.compile(&ir, &options).unwrap();
 
     let in_tensors = [
-        ctx.init_tensor_f16(&[32, 32], &[f16::from_f32(3.0); 1024]),
-        ctx.init_tensor_f16(&[32, 32], &[f16::from_f32(2.0); 1024]),
-        ctx.init_tensor_f16(&[32, 32], &[f16::from_f32(1.0); 1024]),
+        ctx.init_tensor_f16([32, 32].to_vec(), &[f16::from_f32(3.0); 1024]),
+        ctx.init_tensor_f16([32, 32].to_vec(), &[f16::from_f32(2.0); 1024]),
+        ctx.init_tensor_f16([32, 32].to_vec(), &[f16::from_f32(1.0); 1024]),
     ];
 
     let meta_binding = [briny::raw::cast::reinterpret(1e-3_f32), 32, 32];

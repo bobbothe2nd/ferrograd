@@ -123,11 +123,11 @@ fn main() {
     let tensor_start = Instant::now();
 
     let in_tensors = [
-        ctx.init_tensor_bf16(&[M, K], &[A_VAL; (M * K) as usize]),
-        ctx.init_tensor_bf16(&[K, N], &[B_VAL; (K * N) as usize]),
-        ctx.init_tensor_bf16(&[H, M], &[C_VAL; (H * M) as usize]),
-        ctx.init_tensor_bf16(&[N, H], &[D_VAL; (N * H) as usize]),
-        ctx.init_tensor_bf16(&[H, H], &[E_VAL; (H * H) as usize]),
+        ctx.init_tensor_bf16([M, K].to_vec(), &[A_VAL; (M * K) as usize]),
+        ctx.init_tensor_bf16([K, N].to_vec(), &[B_VAL; (K * N) as usize]),
+        ctx.init_tensor_bf16([H, M].to_vec(), &[C_VAL; (H * M) as usize]),
+        ctx.init_tensor_bf16([N, H].to_vec(), &[D_VAL; (N * H) as usize]),
+        ctx.init_tensor_bf16([H, H].to_vec(), &[E_VAL; (H * H) as usize]),
     ];
 
     let meta_binding = [1e-3_f32.to_bits(), M, N, K, H];

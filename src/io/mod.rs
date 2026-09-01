@@ -61,6 +61,9 @@ pub enum SerialTensorError {
 
     /// Invalid path: e.g. no file exists
     InvalidPath,
+
+    /// Failed to read/write to/from file.
+    FailedFileIo,
 }
 
 impl fmt::Display for SerialTensorError {
@@ -71,6 +74,7 @@ impl fmt::Display for SerialTensorError {
             Self::InvalidHeader => write!(f, "invalid header"),
             Self::InvalidPath => write!(f, "invalid path"),
             Self::Unrelated => write!(f, "[other]"),
+            Self::FailedFileIo => write!(f, "failed file I/O"),
         }
     }
 }
@@ -110,8 +114,7 @@ pub fn save_tensors<B: GpuBackend>(
 pub fn load_tensors<B: GpuBackend>(
     path: &str,
     ctx: GpuContext<B>,
-    tensors: &mut [Tensor<B>],
-) -> Result<(), Error<SerialTensorError>> {
+) -> Result<Vec<Tensor<B>>, Error<SerialTensorError>> {
     let mut file = BufReader::new(File::open(path).map_err(|_| Error {
         kind: ErrorKind::SerializationError,
         ctx: SerialTensorError::InvalidPath,
@@ -127,7 +130,7 @@ pub fn load_tensors<B: GpuBackend>(
         })?;
 
     if file_start == headers::BPAT_MAGIC_V0 {
-        return versions::v0_v2::load_tensors_v0(path, ctx, tensors);
+        return versions::v0_v2::load_tensors_v0(&mut file, ctx);
     }
 
     let mut magic_end = [0; 4];
@@ -138,13 +141,13 @@ pub fn load_tensors<B: GpuBackend>(
             msg: "header not found",
         })?;
 
-    match_magic(&file_start, &magic_end)?(file, ctx, tensors)
+    match_magic(&file_start, &magic_end)?(&mut file, ctx)
 }
 
-fn match_magic<B: GpuBackend>(magic_start: &[u8; 4], magic_end: &[u8; 4]) -> Result<fn(BufReader<File>, GpuContext<B>, &mut [Tensor<B>]) -> Result<(), Error<SerialTensorError>>, Error<SerialTensorError>> {
+fn match_magic<B: GpuBackend>(magic_start: &[u8; 4], magic_end: &[u8; 4]) -> Result<fn(&mut BufReader<File>, GpuContext<B>) -> Result<Vec<Tensor<B>>, Error<SerialTensorError>>, Error<SerialTensorError>> {
     use headers::*;
 
-    if BPAT_MAGIC_V1.starts_with(magic_start) && BPAT_MAGIC_V1.ends_with(magic_end) {
+    let func = if BPAT_MAGIC_V1.starts_with(magic_start) && BPAT_MAGIC_V1.ends_with(magic_end) {
         versions::v1::load_tensors_v1
     } else if BPAT_MAGIC_V1_MICRO.starts_with(magic_start) && BPAT_MAGIC_V1_MICRO.ends_with(magic_end) {
         versions::v1::load_tensors_v1m
@@ -155,10 +158,12 @@ fn match_magic<B: GpuBackend>(magic_start: &[u8; 4], magic_end: &[u8; 4]) -> Res
     } else if BPAT_MAGIC_V2_F32.starts_with(magic_start) && BPAT_MAGIC_V2_F32.ends_with(magic_end) {
         versions::v0_v2::load_tensors_v2_f32
     } else {
-        Err(Error {
+        return Err(Error {
             kind: ErrorKind::SerializationError,
             ctx: SerialTensorError::InvalidHeader,
             msg: "invalid magic header",
-        })
-    }
+        });
+    };
+
+    Ok(func)
 }

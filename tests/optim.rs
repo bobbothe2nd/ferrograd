@@ -33,9 +33,9 @@ fn mul_add_forward_backward() {
     let kernels = ctx.compile(&ir, &options).unwrap();
 
     let in_tensors = [
-        ctx.init_tensor_f32(&[32, 32], &[3.0; 1024]),
-        ctx.init_tensor_f32(&[32, 32], &[2.0; 1024]),
-        ctx.init_tensor_f32(&[32, 32], &[1.0; 1024]),
+        ctx.init_tensor_f32([32, 32].to_vec(), &[3.0; 1024]),
+        ctx.init_tensor_f32([32, 32].to_vec(), &[2.0; 1024]),
+        ctx.init_tensor_f32([32, 32].to_vec(), &[1.0; 1024]),
     ];
 
     let meta_binding = [1e-3_f32.to_bits(), 32, 32];

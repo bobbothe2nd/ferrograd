@@ -624,16 +624,16 @@ impl<B: GpuBackend> GpuContext<B> {
         }
     }
 
-    pub fn new_tensor<const N: u32>(&self, shape: &[u32]) -> Tensor<B> {
+    pub fn new_tensor<const N: u32>(&self, shape: Vec<u32>) -> Tensor<B> {
         let len = (shape.iter().product::<u32>() * const { N / 8 }) as usize;
         let data = self.inner.alloc(len);
         Tensor {
-            shape: shape.to_vec(),
+            shape: shape,
             data: GpuBuffer { inner: data },
         }
     }
 
-    pub fn init_tensor_f32(&self, shape: &[u32], data: &[f32]) -> Tensor<B> {
+    pub fn init_tensor_f64(&self, shape: Vec<u32>, data: &[f64]) -> Tensor<B> {
         debug_assert_eq!(
             shape.iter().product::<u32>(),
             data.len() as u32,
@@ -642,12 +642,26 @@ impl<B: GpuBackend> GpuContext<B> {
 
         let data = gpu_alloc_init(&self.inner, data);
         Tensor {
-            shape: shape.to_vec(),
+            shape: shape,
             data,
         }
     }
 
-    pub fn init_tensor_f16(&self, shape: &[u32], data: &[half::f16]) -> Tensor<B> {
+    pub fn init_tensor_f32(&self, shape: Vec<u32>, data: &[f32]) -> Tensor<B> {
+        debug_assert_eq!(
+            shape.iter().product::<u32>(),
+            data.len() as u32,
+            "shape product (left) and data length (right) mismatch"
+        );
+
+        let data = gpu_alloc_init(&self.inner, data);
+        Tensor {
+            shape: shape,
+            data,
+        }
+    }
+
+    pub fn init_tensor_f16(&self, shape: Vec<u32>, data: &[half::f16]) -> Tensor<B> {
         debug_assert_eq!(
             shape.iter().product::<u32>(),
             data.len() as u32,
@@ -658,12 +672,12 @@ impl<B: GpuBackend> GpuContext<B> {
         let data = gpu_alloc_init(&self.inner, data_u16);
 
         Tensor {
-            shape: shape.to_vec(),
+            shape: shape,
             data,
         }
     }
 
-    pub fn init_tensor_bf16(&self, shape: &[u32], data: &[half::bf16]) -> Tensor<B> {
+    pub fn init_tensor_bf16(&self, shape: Vec<u32>, data: &[half::bf16]) -> Tensor<B> {
         debug_assert_eq!(
             shape.iter().product::<u32>(),
             data.len() as u32,
@@ -674,7 +688,7 @@ impl<B: GpuBackend> GpuContext<B> {
         let data = gpu_alloc_init(&self.inner, data_u16);
 
         Tensor {
-            shape: shape.to_vec(),
+            shape: shape,
             data,
         }
     }

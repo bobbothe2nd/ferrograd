@@ -35,9 +35,9 @@ fn mul_add_forward_backward() {
     let kernels = ctx.compile(&ir, &options).unwrap();
 
     let in_tensors = [
-        ctx.init_tensor_f32(&[32, 32], &[3.0; 1024]),
-        ctx.init_tensor_f32(&[32, 32], &[2.0; 1024]),
-        ctx.init_tensor_f32(&[32, 32], &[1.0; 1024]),
+        ctx.init_tensor_f32([32, 32].to_vec(), &[3.0; 1024]),
+        ctx.init_tensor_f32([32, 32].to_vec(), &[2.0; 1024]),
+        ctx.init_tensor_f32([32, 32].to_vec(), &[1.0; 1024]),
     ];
 
     let meta_binding = [1e-3_f32.to_bits(), 32, 32];
@@ -121,9 +121,9 @@ fn matmul_sub_softmax_forward_backward() {
     let kernels = ctx.compile(&ir, &options).unwrap();
 
     let in_tensors = [
-        ctx.init_tensor_f32(&[16, 32], &[3.0; 512]),
-        ctx.init_tensor_f32(&[32, 64], &[2.0; 2048]),
-        ctx.init_tensor_f32(&[16, 64], &[1.0; 1024]),
+        ctx.init_tensor_f32([16, 32].to_vec(), &[3.0; 512]),
+        ctx.init_tensor_f32([32, 64].to_vec(), &[2.0; 2048]),
+        ctx.init_tensor_f32([16, 64].to_vec(), &[1.0; 1024]),
     ];
 
     let meta_binding = [1e-3_f32.to_bits(), 16, 64, 32];
@@ -208,7 +208,7 @@ fn div_const_softmax_forward_backward() {
     let ir = graph.lower(meta, &options, &saved).unwrap();
     let kernels = ctx.compile(&ir, &options).unwrap();
 
-    let in_tensors = [ctx.init_tensor_f32(&[16, 32], &[3.0; 512])];
+    let in_tensors = [ctx.init_tensor_f32([16, 32].to_vec(), &[3.0; 512])];
 
     let meta_binding = [1e-3_f32.to_bits(), 16, 32];
     assert!(meta.validate_meta(&meta_binding));
@@ -295,9 +295,9 @@ fn matmul_add_forward_backward() {
     let kernels = ctx.compile(&ir, &options).unwrap();
 
     let in_tensors = [
-        ctx.init_tensor_f32(&[M, K], &[A_VAL; (M * K) as usize]),
-        ctx.init_tensor_f32(&[K, N], &[B_VAL; (K * N) as usize]),
-        ctx.init_tensor_f32(&[M, N], &[C_VAL; (M * N) as usize]),
+        ctx.init_tensor_f32([M, K].to_vec(), &[A_VAL; (M * K) as usize]),
+        ctx.init_tensor_f32([K, N].to_vec(), &[B_VAL; (K * N) as usize]),
+        ctx.init_tensor_f32([M, N].to_vec(), &[C_VAL; (M * N) as usize]),
     ];
 
     let meta_binding = [1e-3_f32.to_bits(), M, N, K];
@@ -416,11 +416,11 @@ fn matmul_chain3_forward_backward() {
     let kernels = ctx.compile(&ir, &options).unwrap();
 
     let in_tensors = [
-        ctx.init_tensor_f32(&[M, K], &[A_VAL; (M * K) as usize]),
-        ctx.init_tensor_f32(&[K, N], &[B_VAL; (K * N) as usize]),
-        ctx.init_tensor_f32(&[H, M], &[C_VAL; (H * M) as usize]),
-        ctx.init_tensor_f32(&[N, H], &[D_VAL; (N * H) as usize]),
-        ctx.init_tensor_f32(&[H, H], &[E_VAL; (H * H) as usize]),
+        ctx.init_tensor_f32([M, K].to_vec(), &[A_VAL; (M * K) as usize]),
+        ctx.init_tensor_f32([K, N].to_vec(), &[B_VAL; (K * N) as usize]),
+        ctx.init_tensor_f32([H, M].to_vec(), &[C_VAL; (H * M) as usize]),
+        ctx.init_tensor_f32([N, H].to_vec(), &[D_VAL; (N * H) as usize]),
+        ctx.init_tensor_f32([H, H].to_vec(), &[E_VAL; (H * H) as usize]),
     ];
 
     let meta_binding = [1e-3_f32.to_bits(), M, N, K, H];
@@ -555,10 +555,10 @@ fn matmul_sub_forward_backward() {
     let kernels = ctx.compile(&ir, &options).unwrap();
 
     let in_tensors = [
-        ctx.init_tensor_f32(&[M, K], &[A_VAL; (M * K) as usize]),
-        ctx.init_tensor_f32(&[K, N], &[B_VAL; (K * N) as usize]),
-        ctx.init_tensor_f32(&[M, K], &[C_VAL; (M * K) as usize]),
-        ctx.init_tensor_f32(&[K, N], &[D_VAL; (K * N) as usize]),
+        ctx.init_tensor_f32([M, K].to_vec(), &[A_VAL; (M * K) as usize]),
+        ctx.init_tensor_f32([K, N].to_vec(), &[B_VAL; (K * N) as usize]),
+        ctx.init_tensor_f32([M, K].to_vec(), &[C_VAL; (M * K) as usize]),
+        ctx.init_tensor_f32([K, N].to_vec(), &[D_VAL; (K * N) as usize]),
     ];
 
     let meta_binding = [1e-3_f32.to_bits(), M, N, K];
