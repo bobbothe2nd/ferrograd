@@ -97,7 +97,7 @@ pub const BPAT_MAGIC_V2_F16: [u8; 8] = *b"BPAT\0f16";
 /// ```
 pub const BPAT_MAGIC_V2_BF16: [u8; 8] = *b"BPATbf16";
 
-/// Same as [`BPAT_MAGIC_V2_F16`], but uses `bf16` storage instead.
+/// Same as [`BPAT_MAGIC_V2_F16`], but uses `f32` storage instead.
 ///
 /// Created on `fused_gpu` `v0.1.0-alpha.4`.
 ///

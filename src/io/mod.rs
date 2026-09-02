@@ -1,9 +1,16 @@
 //! Revival of `bpat` storage format used in `briny_ai`.
 
 use core::fmt;
-use std::{io::{BufReader, Read}, fs::File};
+use std::{
+    fs::File,
+    io::{BufReader, Read},
+};
 
-use crate::{dispatch::{GpuBackend, GpuContext}, errors::{Error, ErrorKind}, tensor::Tensor};
+use crate::{
+    dispatch::{GpuBackend, GpuContext},
+    errors::{Error, ErrorKind},
+    tensor::Tensor,
+};
 
 pub mod headers;
 
@@ -89,7 +96,7 @@ impl fmt::Display for SerialTensorError {
 /// - The file path is invalid
 pub fn save_tensors<B: GpuBackend>(
     path: &str,
-    ctx: GpuContext<B>,
+    ctx: &GpuContext<B>,
     tensors: &[Tensor<B>],
     header: BpatHeader,
 ) -> Result<(), Error<SerialTensorError>> {
@@ -113,7 +120,7 @@ pub fn save_tensors<B: GpuBackend>(
 /// - The file is in `bpat` format
 pub fn load_tensors<B: GpuBackend>(
     path: &str,
-    ctx: GpuContext<B>,
+    ctx: &GpuContext<B>,
 ) -> Result<Vec<Tensor<B>>, Error<SerialTensorError>> {
     let mut file = BufReader::new(File::open(path).map_err(|_| Error {
         kind: ErrorKind::SerializationError,
@@ -122,36 +129,47 @@ pub fn load_tensors<B: GpuBackend>(
     })?);
 
     let mut file_start = [0; 4];
-    file.read_exact(&mut file_start)
-        .map_err(|_| Error {
-            kind: ErrorKind::SerializationError,
-            ctx: SerialTensorError::InvalidHeader,
-            msg: "header not found",
-        })?;
+    file.read_exact(&mut file_start).map_err(|_| Error {
+        kind: ErrorKind::SerializationError,
+        ctx: SerialTensorError::InvalidHeader,
+        msg: "header not found",
+    })?;
 
     if file_start == headers::BPAT_MAGIC_V0 {
         return versions::v0_v2::load_tensors_v0(&mut file, ctx);
     }
 
     let mut magic_end = [0; 4];
-    file.read_exact(&mut magic_end)
-        .map_err(|_| Error {
-            kind: ErrorKind::SerializationError,
-            ctx: SerialTensorError::InvalidHeader,
-            msg: "header not found",
-        })?;
+    file.read_exact(&mut magic_end).map_err(|_| Error {
+        kind: ErrorKind::SerializationError,
+        ctx: SerialTensorError::InvalidHeader,
+        msg: "header not found",
+    })?;
 
     match_magic(&file_start, &magic_end)?(&mut file, ctx)
 }
 
-fn match_magic<B: GpuBackend>(magic_start: &[u8; 4], magic_end: &[u8; 4]) -> Result<fn(&mut BufReader<File>, GpuContext<B>) -> Result<Vec<Tensor<B>>, Error<SerialTensorError>>, Error<SerialTensorError>> {
-    use headers::*;
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn match_magic<B: GpuBackend>(
+    magic_start: &[u8; 4],
+    magic_end: &[u8; 4],
+) -> Result<
+    fn(&mut BufReader<File>, &GpuContext<B>) -> Result<Vec<Tensor<B>>, Error<SerialTensorError>>,
+    Error<SerialTensorError>,
+> {
+    use headers::{
+        BPAT_MAGIC_V1, BPAT_MAGIC_V1_MICRO, BPAT_MAGIC_V2_BF16, BPAT_MAGIC_V2_F16,
+        BPAT_MAGIC_V2_F32,
+    };
 
     let func = if BPAT_MAGIC_V1.starts_with(magic_start) && BPAT_MAGIC_V1.ends_with(magic_end) {
         versions::v1::load_tensors_v1
-    } else if BPAT_MAGIC_V1_MICRO.starts_with(magic_start) && BPAT_MAGIC_V1_MICRO.ends_with(magic_end) {
+    } else if BPAT_MAGIC_V1_MICRO.starts_with(magic_start)
+        && BPAT_MAGIC_V1_MICRO.ends_with(magic_end)
+    {
         versions::v1::load_tensors_v1m
-    } else if BPAT_MAGIC_V2_BF16.starts_with(magic_start) && BPAT_MAGIC_V2_BF16.ends_with(magic_end) {
+    } else if BPAT_MAGIC_V2_BF16.starts_with(magic_start) && BPAT_MAGIC_V2_BF16.ends_with(magic_end)
+    {
         versions::v0_v2::load_tensors_v2_bf16
     } else if BPAT_MAGIC_V2_F16.starts_with(magic_start) && BPAT_MAGIC_V2_F16.ends_with(magic_end) {
         versions::v0_v2::load_tensors_v2_f16

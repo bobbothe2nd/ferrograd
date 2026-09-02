@@ -1,14 +1,14 @@
 //! Safe error handling for all possibilities.
 
-use crate::{dispatch::{
+use crate::dispatch::{
     GpuBackend,
     backend::{GpuContext, GraphOp, MetaId, NodeId},
-}, io::SerialTensorError};
-use std::vec::Vec;
+};
 use core::{
     error::Error as CoreError,
     fmt::{Debug, Display, Formatter, Result},
 };
+use std::vec::Vec;
 
 #[cfg(feature = "telemetry")]
 use gpu_telemetry::errors::{self, ErrorKind as TelemetryErrorKind};
@@ -51,7 +51,8 @@ impl<B: GpuBackend> Display for Error<GraphErrorContext<'_, B>> {
     }
 }
 
-impl Display for Error<SerialTensorError> {
+#[cfg(feature = "io")]
+impl Display for Error<crate::io::SerialTensorError> {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         debug_assert_eq!(self.kind, ErrorKind::ComputeGraphError);
 

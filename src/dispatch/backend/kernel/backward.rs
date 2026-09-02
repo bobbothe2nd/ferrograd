@@ -11,8 +11,8 @@ use crate::{
     },
     errors::{Error, ErrorKind},
 };
-use std::{vec, vec::Vec};
 use core::cmp::Ordering;
+use std::{vec, vec::Vec};
 
 #[inline]
 pub fn lower_backward<'a, B: GpuBackend>(

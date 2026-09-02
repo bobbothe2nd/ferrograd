@@ -3,6 +3,7 @@
 //! It supports CUDA, ROCM, and WGSL. It will compile anything the feature set describes:
 //!
 //! - `wgsl`: Enable WGSL support
+//! - `io`: Enable support for I/O (`bpat`)
 //! - `std`: Enables the standard library (for `fused_gpu`, not the core crate)
 //! - `telemetry`: Cleans `gpu_telemetry` error handling
 //!
@@ -16,6 +17,7 @@
 #![allow(clippy::too_many_lines)]
 #![allow(clippy::similar_names)]
 #![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_lossless)]
 #![allow(clippy::missing_errors_doc)]
 #![deny(clippy::nursery)]
 #![deny(clippy::all)]

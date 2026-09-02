@@ -1,5 +1,5 @@
-use std::{string::String, vec, vec::Vec};
 use core::{cmp::Ordering, fmt::Debug};
+use std::{string::String, vec, vec::Vec};
 
 use crate::{
     dispatch::{

@@ -8,13 +8,13 @@ use crate::{
     errors::Error,
     tensor::{Tensor, ToBuffer, build_dims},
 };
-use std::{vec, vec::Vec};
 use briny::{
     raw::cast::{slice_to_bytes, slice_to_bytes_mut},
     traits::Pod,
 };
 use core::{fmt::Debug, marker::PhantomData};
 use half::slice::HalfFloatSliceExt;
+use std::{vec, vec::Vec};
 
 pub mod backend;
 
@@ -628,7 +628,7 @@ impl<B: GpuBackend> GpuContext<B> {
         let len = (shape.iter().product::<u32>() * const { N / 8 }) as usize;
         let data = self.inner.alloc(len);
         Tensor {
-            shape: shape,
+            shape,
             data: GpuBuffer { inner: data },
         }
     }
@@ -641,10 +641,7 @@ impl<B: GpuBackend> GpuContext<B> {
         );
 
         let data = gpu_alloc_init(&self.inner, data);
-        Tensor {
-            shape: shape,
-            data,
-        }
+        Tensor { shape, data }
     }
 
     pub fn init_tensor_f32(&self, shape: Vec<u32>, data: &[f32]) -> Tensor<B> {
@@ -655,10 +652,7 @@ impl<B: GpuBackend> GpuContext<B> {
         );
 
         let data = gpu_alloc_init(&self.inner, data);
-        Tensor {
-            shape: shape,
-            data,
-        }
+        Tensor { shape, data }
     }
 
     pub fn init_tensor_f16(&self, shape: Vec<u32>, data: &[half::f16]) -> Tensor<B> {
@@ -671,10 +665,7 @@ impl<B: GpuBackend> GpuContext<B> {
         let data_u16 = data.reinterpret_cast();
         let data = gpu_alloc_init(&self.inner, data_u16);
 
-        Tensor {
-            shape: shape,
-            data,
-        }
+        Tensor { shape, data }
     }
 
     pub fn init_tensor_bf16(&self, shape: Vec<u32>, data: &[half::bf16]) -> Tensor<B> {
@@ -687,10 +678,7 @@ impl<B: GpuBackend> GpuContext<B> {
         let data_u16 = data.reinterpret_cast();
         let data = gpu_alloc_init(&self.inner, data_u16);
 
-        Tensor {
-            shape: shape,
-            data,
-        }
+        Tensor { shape, data }
     }
 
     /// Allocates an empty one-hot vector.

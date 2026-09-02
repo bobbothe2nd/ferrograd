@@ -337,9 +337,9 @@ fn const_fold(kernel: &mut RawKernel, value_id: ValueId) {
                     && let Some(Op::ConstF32 { value: b }) = b.init
                     && let Some(Op::ConstF32 { value: c }) = c.init
                 {
-                    kernel.values[value_id]
-                        .init
-                        .replace(Op::ConstF32 { value: (a * b) + c });
+                    kernel.values[value_id].init.replace(Op::ConstF32 {
+                        value: a.mul_add(b, c),
+                    });
                 }
             }
             _ => {}
