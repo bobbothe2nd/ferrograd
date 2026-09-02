@@ -43,7 +43,7 @@ fn mul_add_forward_backward() {
 
     let saved_tensors = ctx.alloc_tensors(&graph, &saved, &meta_binding, &state);
 
-    let upload = ctx.upload(&saved_tensors.seed, &[1_f32; 1024]).unwrap();
+    let upload = ctx.upload(&saved_tensors.seed, &[1_f32; 1024], 0).unwrap();
 
     let mut schedule = ctx
         .schedule(

@@ -4,6 +4,7 @@ use core::fmt;
 use std::{
     fs::File,
     io::{BufReader, Read},
+    path::Path,
 };
 
 use crate::{
@@ -94,8 +95,8 @@ impl fmt::Display for SerialTensorError {
 ///
 /// - The tensors are invalid
 /// - The file path is invalid
-pub fn save_tensors<B: GpuBackend>(
-    path: &str,
+pub fn save_tensors<P: AsRef<Path>, B: GpuBackend>(
+    path: P,
     ctx: &GpuContext<B>,
     tensors: &[Tensor<B>],
     header: BpatHeader,
@@ -118,8 +119,8 @@ pub fn save_tensors<B: GpuBackend>(
 ///
 /// - The file exists
 /// - The file is in `bpat` format
-pub fn load_tensors<B: GpuBackend>(
-    path: &str,
+pub fn load_tensors<P: AsRef<Path>, B: GpuBackend>(
+    path: P,
     ctx: &GpuContext<B>,
 ) -> Result<Vec<Tensor<B>>, Error<SerialTensorError>> {
     let mut file = BufReader::new(File::open(path).map_err(|_| Error {

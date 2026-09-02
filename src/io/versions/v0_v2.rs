@@ -1,6 +1,7 @@
 use std::{
     fs::File,
     io::{BufReader, BufWriter, Read, Write},
+    path::Path,
 };
 
 use briny::{
@@ -11,51 +12,55 @@ use briny::{
 use crate::{
     dispatch::{GpuBackend, GpuContext},
     errors::{Error, ErrorKind},
-    io::{SerialTensorError, headers::BPAT_MAGIC_V0},
+    io::{
+        SerialTensorError,
+        headers::{BPAT_MAGIC_V0, BPAT_MAGIC_V2_BF16, BPAT_MAGIC_V2_F16, BPAT_MAGIC_V2_F32},
+    },
     tensor::Tensor,
 };
 
 /// Currently requires tensors to be `f64`.
-pub fn save_tensors_v0<B: GpuBackend>(
-    path: &str,
+pub fn save_tensors_v0<P: AsRef<Path>, B: GpuBackend>(
+    path: P,
     ctx: &GpuContext<B>,
     tensors: &[Tensor<B>],
 ) -> Result<(), Error<SerialTensorError>> {
-    save_tensors::<8, f64, B>(path, ctx, tensors)
+    save_tensors::<8, P, f64, B>(path, ctx, tensors, &BPAT_MAGIC_V0)
 }
 
 /// Currently requires tensors to be `f32`.
-pub fn save_tensors_v2_f32<B: GpuBackend>(
-    path: &str,
+pub fn save_tensors_v2_f32<P: AsRef<Path>, B: GpuBackend>(
+    path: P,
     ctx: &GpuContext<B>,
     tensors: &[Tensor<B>],
 ) -> Result<(), Error<SerialTensorError>> {
-    save_tensors::<4, f32, B>(path, ctx, tensors)
+    save_tensors::<4, P, f32, B>(path, ctx, tensors, &BPAT_MAGIC_V2_F32)
 }
 
 /// Currently requires tensors to be `f16`.
-pub fn save_tensors_v2_f16<B: GpuBackend>(
-    path: &str,
+pub fn save_tensors_v2_f16<P: AsRef<Path>, B: GpuBackend>(
+    path: P,
     ctx: &GpuContext<B>,
     tensors: &[Tensor<B>],
 ) -> Result<(), Error<SerialTensorError>> {
-    save_tensors::<4, half::f16, B>(path, ctx, tensors)
+    save_tensors::<4, P, half::f16, B>(path, ctx, tensors, &BPAT_MAGIC_V2_F16)
 }
 
 /// Currently requires tensors to be `bf16`.
-pub fn save_tensors_v2_bf16<B: GpuBackend>(
-    path: &str,
+pub fn save_tensors_v2_bf16<P: AsRef<Path>, B: GpuBackend>(
+    path: P,
     ctx: &GpuContext<B>,
     tensors: &[Tensor<B>],
 ) -> Result<(), Error<SerialTensorError>> {
-    save_tensors::<4, half::bf16, B>(path, ctx, tensors)
+    save_tensors::<4, P, half::bf16, B>(path, ctx, tensors, &BPAT_MAGIC_V2_BF16)
 }
 
 #[inline]
-fn save_tensors<const U: usize, F: Default + Pod + Clone, B: GpuBackend>(
-    path: &str,
+fn save_tensors<const U: usize, P: AsRef<Path>, F: Default + Pod + Clone, B: GpuBackend>(
+    path: P,
     ctx: &GpuContext<B>,
     tensors: &[Tensor<B>],
+    magic: &[u8],
 ) -> Result<(), Error<SerialTensorError>> {
     let mut file = BufWriter::new(File::create(path).map_err(|_| Error {
         msg: "file not found",
@@ -63,8 +68,8 @@ fn save_tensors<const U: usize, F: Default + Pod + Clone, B: GpuBackend>(
         ctx: SerialTensorError::InvalidPath,
     })?);
 
-    file.write(&BPAT_MAGIC_V0).map_err(|_| Error {
-        msg: "filed to write to file",
+    file.write(magic).map_err(|_| Error {
+        msg: "failed to write to file",
         kind: ErrorKind::SerializationError,
         ctx: SerialTensorError::FailedFileIo,
     })?;
@@ -74,7 +79,7 @@ fn save_tensors<const U: usize, F: Default + Pod + Clone, B: GpuBackend>(
         ctx: SerialTensorError::Unrelated,
     })?])
     .map_err(|_| Error {
-        msg: "filed to write to file",
+        msg: "failed to write to file",
         kind: ErrorKind::SerializationError,
         ctx: SerialTensorError::FailedFileIo,
     })?;
@@ -93,7 +98,7 @@ fn save_tensors<const U: usize, F: Default + Pod + Clone, B: GpuBackend>(
             .map(|x| (*x as u64).to_le_bytes()[..U].try_into().unwrap_or([0; U]))
             .collect::<Vec<[u8; U]>>();
         file.write(slice_to_bytes(&shape_u64)).map_err(|_| Error {
-            msg: "filed to write to file",
+            msg: "failed to write to file",
             kind: ErrorKind::SerializationError,
             ctx: SerialTensorError::FailedFileIo,
         })?;
@@ -118,7 +123,7 @@ fn save_tensors<const U: usize, F: Default + Pod + Clone, B: GpuBackend>(
         })?;
 
         file.write(&buf).map_err(|_| Error {
-            msg: "filed to write to file",
+            msg: "failed to write to file",
             kind: ErrorKind::SerializationError,
             ctx: SerialTensorError::FailedFileIo,
         })?;
@@ -167,6 +172,7 @@ macro_rules! impl_load {
 
                 let len = shape.iter().product::<u32>();
 
+                // cant allocate this, use empty init and buffer file io using multiple uploads
                 let mut data = vec![$float::default(); len as usize];
 
                 file.read_exact(slice_to_bytes_mut(&mut data))
@@ -236,7 +242,7 @@ macro_rules! impl_load {
                     prev_sync.sync();
                 }
 
-                prev_sync = Some(ctx.upload(tensor, &data).map_err(|err| Error {
+                prev_sync = Some(ctx.upload(tensor, &data, 0).map_err(|err| Error {
                     msg: err.msg,
                     kind: err.kind,
                     ctx: SerialTensorError::Unrelated,
@@ -280,7 +286,7 @@ impl_load!(
     u32
 );
 
-#[cfg(test)]
+#[cfg(all(test, feature = "wgsl"))]
 mod tests {
     use std::{
         fs::{File, remove_file},
@@ -289,13 +295,11 @@ mod tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
-    use half::{bf16, f16};
-
     use super::*;
     use crate::{
         dispatch::{GpuBackend, GpuContext},
         io::headers::BPAT_MAGIC_V0,
-        tensor::Tensor,
+        tensor::{Tensor, bf16, f16},
     };
 
     fn temp_path(name: &str) -> PathBuf {
@@ -314,10 +318,14 @@ mod tests {
     fn open_payload(path: &str) -> BufReader<File> {
         let mut file = BufReader::new(File::open(path).unwrap());
 
-        let mut magic = [0u8; BPAT_MAGIC_V0.len()];
-        file.read_exact(&mut magic).unwrap();
+        let mut file_start = [0; 4];
+        file.read_exact(&mut file_start).unwrap();
 
-        assert_eq!(magic, BPAT_MAGIC_V0);
+        if file_start == BPAT_MAGIC_V0 {
+            return file;
+        }
+
+        file.seek_relative(4).unwrap();
 
         file
     }

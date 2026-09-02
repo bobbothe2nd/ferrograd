@@ -2,7 +2,7 @@
 name = "fused_gpu"
 version = "0.1.0-alpha.4"
 edition = "2024"
-rust-version = "1.87"
+rust-version = "1.89"
 documentation = "https://docs.rs/fused_gpu"
 repository = "https://github.com/bobbothe2nd/fused_gpu"
 readme = "README.md"
@@ -56,6 +56,8 @@ crc32fast = { version = "1.5.1", optional = true }
 
 [dev-dependencies]
 gpu_telemetry = "0.2.0"
+rand_core = "0.10.1"
+rand_xorshift = "0.5.0"
 
 [target.'cfg(target_os = "windows")'.dependencies.wgpu]
 version = "30.0.0"

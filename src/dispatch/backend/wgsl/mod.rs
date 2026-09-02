@@ -184,10 +184,15 @@ impl GpuBackend for GpuContext {
     }
 
     #[inline]
-    fn upload(&self, buffer: &Self::Buffer, data: &[u8]) -> Result<Self::SubmissionIndex, Error> {
-        if buffer.size_bytes() as usize != data.len() {
+    fn upload(
+        &self,
+        buffer: &Self::Buffer,
+        data: &[u8],
+        dst_off: u32,
+    ) -> Result<Self::SubmissionIndex, Error> {
+        if buffer.size_bytes().saturating_sub(dst_off) as usize > data.len() {
             return Err(Error {
-                msg: "CPU and GPU buffers of unequal sizes during upload",
+                msg: "CPU buffer of smaller size than GPU buffer during upload",
                 kind: ErrorKind::FailedBufferCopy,
                 ctx: (),
             });
@@ -198,10 +203,10 @@ impl GpuBackend for GpuContext {
             .create_command_encoder(&CommandEncoderDescriptor::default());
         let src = self.device.create_buffer_init(&BufferInitDescriptor {
             label: Some("gpu_tensor"),
-            contents: cast_slice(data),
+            contents: data,
             usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC,
         });
-        encoder.copy_buffer_to_buffer(&src, 0, &buffer.0, 0, buffer.0.size());
+        encoder.copy_buffer_to_buffer(&src, 0, &buffer.0, dst_off as u64, Some(data.len() as u64));
 
         Ok(self.queue.submit(Some(encoder.finish())))
     }

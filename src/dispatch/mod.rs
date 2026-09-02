@@ -202,12 +202,17 @@ pub trait GpuBackend: Sized {
     /// This allocation is often small and uniform.
     fn alloc_meta(&self, data: &[u32]) -> Self::Buffer;
 
-    /// Copies the content of a CPU buffer to a GPU buffer.
+    /// Copies the content of a CPU buffer to a GPU buffer at offset `dst_off`.
     ///
     /// # Errors
     ///
     /// Should return an [`ErrorKind::FailedBufferCopy`](`crate::errors::ErrorKind::FailedBufferCopy`).
-    fn upload(&self, buffer: &Self::Buffer, data: &[u8]) -> Result<Self::SubmissionIndex, Error>;
+    fn upload(
+        &self,
+        buffer: &Self::Buffer,
+        data: &[u8],
+        dst_off: u32,
+    ) -> Result<Self::SubmissionIndex, Error>;
 
     /// Copies the content of one buffer to another.
     ///
@@ -524,9 +529,10 @@ impl<B: GpuBackend> GpuContext<B> {
         &self,
         tensor: &S,
         dst: &[T],
+        dst_off: u32,
     ) -> Result<SubmissionIndex<'_, B>, Error> {
         self.inner
-            .upload(tensor.as_buffer(), slice_to_bytes(dst))
+            .upload(tensor.as_buffer(), slice_to_bytes(dst), dst_off)
             .map(|x| SubmissionIndex(x, self))
     }
 
@@ -784,6 +790,24 @@ impl<B: GpuBackend> GpuContext<B> {
             optim,
         })
     }
+
+    #[cfg(feature = "io")]
+    pub fn save_tensors<P: AsRef<std::path::Path>>(
+        &self,
+        path: P,
+        tensors: &[Tensor<B>],
+        header: crate::io::BpatHeader,
+    ) -> Result<(), Error<crate::io::SerialTensorError>> {
+        crate::io::save_tensors(path, self, tensors, header)
+    }
+
+    #[cfg(feature = "io")]
+    pub fn load_tensors<P: AsRef<std::path::Path>>(
+        &self,
+        path: P,
+    ) -> Result<Vec<Tensor<B>>, Error<crate::io::SerialTensorError>> {
+        crate::io::load_tensors(path, self)
+    }
 }
 
 #[must_use]
@@ -802,43 +826,39 @@ impl<B: GpuBackend> Batcher<'_, B> {
             .dispatch_schedule(&mut self.0, &schedule.backward);
     }
 
-    pub fn dispatch_loss<'a, T: ToBuffer<B>>(
-        &mut self,
-        schedule: &mut Schedule<'a, B>,
-        target: &'a T,
-    ) {
-        schedule.loss.bindings[4] = target.as_buffer();
+    pub fn dispatch_loss<T: ToBuffer<B>>(&mut self, schedule: &mut Schedule<'_, B>, target: &T) {
+        let mut bindings = schedule.loss.bindings;
+        bindings[4] = target.as_buffer();
 
         self.1.inner.dispatch_kernel(
             &mut self.0,
             schedule.loss.kernel,
             schedule.loss.grid,
-            &schedule.loss.bindings,
+            &bindings,
         );
     }
 
-    pub fn dispatch_optim<'a, const N: usize>(
+    pub fn dispatch_optim<const N: usize>(
         &mut self,
-        schedule: &mut Schedule<'a, B>,
-        weight: &'a Tensor<B>,
+        schedule: &mut Schedule<'_, B>,
+        weight: &Tensor<B>,
         grad: usize,
-        tensors: &'a AllocTensors<B>,
+        tensors: &AllocTensors<B>,
     ) {
         let grid = weight.calc_grid(*schedule.optim.kernel.block());
 
-        schedule.optim.bindings[1] = weight.as_buffer();
-        schedule.optim.bindings[2] = &tensors.grad_tensors[grad];
+        let mut bindings = schedule.optim.bindings.clone();
+
+        bindings[1] = weight.as_buffer();
+        bindings[2] = &tensors.grad_tensors[grad];
 
         for state_t in 0..N {
-            schedule.optim.bindings[3 + state_t] = &schedule.optim.state[state_t];
+            bindings[3 + state_t] = &schedule.optim.state[state_t];
         }
 
-        self.1.inner.dispatch_kernel(
-            &mut self.0,
-            schedule.optim.kernel,
-            grid,
-            &schedule.optim.bindings,
-        );
+        self.1
+            .inner
+            .dispatch_kernel(&mut self.0, schedule.optim.kernel, grid, &bindings);
     }
 }
 

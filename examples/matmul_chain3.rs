@@ -135,7 +135,7 @@ fn main() {
 
     let saved_tensors = ctx.alloc_tensors(&graph, &saved, &meta_binding, &state);
 
-    ctx.upload(&saved_tensors.seed, &[1_f32; (H * H) as usize])
+    ctx.upload(&saved_tensors.seed, &[1_f32; (H * H) as usize], 0)
         .unwrap()
         .sync();
 
@@ -154,7 +154,7 @@ fn main() {
         )
         .unwrap();
 
-    let monitor: GpuMonitor<Telemetry> = GpuMonitor::start(Duration::from_millis(3)).unwrap();
+    let monitor: GpuMonitor<Telemetry> = GpuMonitor::start(Duration::from_millis(10)).unwrap();
 
     model_runtime(&ctx, &schedule);
 

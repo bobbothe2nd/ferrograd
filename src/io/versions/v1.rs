@@ -1,6 +1,7 @@
 use std::{
     fs::File,
     io::{BufReader, BufWriter, Read, Write},
+    path::Path,
 };
 
 use briny::{
@@ -12,33 +13,37 @@ use crc32fast::Hasher;
 use crate::{
     dispatch::{GpuBackend, GpuContext},
     errors::{Error, ErrorKind},
-    io::{SerialTensorError, headers::BPAT_MAGIC_V0},
+    io::{
+        SerialTensorError,
+        headers::{BPAT_MAGIC_V1, BPAT_MAGIC_V1_MICRO},
+    },
     tensor::Tensor,
 };
 
 /// Currently requires tensors to be `f64`.
-pub fn save_tensors_v1<B: GpuBackend>(
-    path: &str,
+pub fn save_tensors_v1<P: AsRef<Path>, B: GpuBackend>(
+    path: P,
     ctx: &GpuContext<B>,
     tensors: &[Tensor<B>],
 ) -> Result<(), Error<SerialTensorError>> {
-    save_tensors::<8, f64, B>(path, ctx, tensors)
+    save_tensors::<8, P, f64, B>(path, ctx, tensors, &BPAT_MAGIC_V1)
 }
 
 /// Currently requires tensors to be `f32`.
-pub fn save_tensors_v1m<B: GpuBackend>(
-    path: &str,
+pub fn save_tensors_v1m<P: AsRef<Path>, B: GpuBackend>(
+    path: P,
     ctx: &GpuContext<B>,
     tensors: &[Tensor<B>],
 ) -> Result<(), Error<SerialTensorError>> {
-    save_tensors::<4, f32, B>(path, ctx, tensors)
+    save_tensors::<4, P, f32, B>(path, ctx, tensors, &BPAT_MAGIC_V1_MICRO)
 }
 
 #[inline]
-fn save_tensors<const U: usize, F: Default + Pod + Clone, B: GpuBackend>(
-    path: &str,
+fn save_tensors<const U: usize, P: AsRef<Path>, F: Default + Pod + Clone, B: GpuBackend>(
+    path: P,
     ctx: &GpuContext<B>,
     tensors: &[Tensor<B>],
+    magic: &[u8],
 ) -> Result<(), Error<SerialTensorError>> {
     let mut file = BufWriter::new(File::create(path).map_err(|_| Error {
         msg: "file not found",
@@ -47,7 +52,7 @@ fn save_tensors<const U: usize, F: Default + Pod + Clone, B: GpuBackend>(
     })?);
 
     let mut file_hasher = Hasher::new();
-    file_hasher.update(&BPAT_MAGIC_V0);
+    file_hasher.update(magic);
 
     let len = tensors.len().try_into().map_err(|_| Error {
         msg: "exceeds max tensors of 255",
@@ -56,7 +61,7 @@ fn save_tensors<const U: usize, F: Default + Pod + Clone, B: GpuBackend>(
     })?;
     file_hasher.update(&[len]);
 
-    file.write(&BPAT_MAGIC_V0).map_err(|_| Error {
+    file.write(magic).map_err(|_| Error {
         msg: "filed to write to file",
         kind: ErrorKind::SerializationError,
         ctx: SerialTensorError::FailedFileIo,
@@ -247,7 +252,7 @@ macro_rules! impl_load {
                     prev_sync.sync();
                 }
 
-                prev_sync = Some(ctx.upload(tensor, &data).map_err(|err| Error {
+                prev_sync = Some(ctx.upload(tensor, &data, 0).map_err(|err| Error {
                     msg: err.msg,
                     kind: err.kind,
                     ctx: SerialTensorError::Unrelated,

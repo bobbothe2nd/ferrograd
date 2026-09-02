@@ -45,7 +45,7 @@ fn mul_add_forward_backward() {
 
     let saved_tensors = ctx.alloc_tensors(&graph, &saved, &meta_binding, &state);
 
-    let upload = ctx.upload(&saved_tensors.seed, &[1_f32; 1024]).unwrap();
+    let upload = ctx.upload(&saved_tensors.seed, &[1_f32; 1024], 0).unwrap();
 
     let schedule = ctx
         .schedule(
@@ -131,7 +131,9 @@ fn matmul_sub_softmax_forward_backward() {
 
     let saved_tensors = ctx.alloc_tensors(&graph, &saved, &meta_binding, &state);
 
-    let upload = ctx.upload(&saved_tensors.seed, &[1.0_f32; 1024]).unwrap();
+    let upload = ctx
+        .upload(&saved_tensors.seed, &[1.0_f32; 1024], 0)
+        .unwrap();
 
     let schedule = ctx
         .schedule(
@@ -215,7 +217,7 @@ fn div_const_softmax_forward_backward() {
 
     let saved_tensors = ctx.alloc_tensors(&graph, &saved, &meta_binding, &state);
 
-    let upload = ctx.upload(&saved_tensors.seed, &[1_f32; 512]).unwrap();
+    let upload = ctx.upload(&saved_tensors.seed, &[1_f32; 512], 0).unwrap();
 
     let schedule = ctx
         .schedule(
@@ -306,7 +308,7 @@ fn matmul_add_forward_backward() {
     let saved_tensors = ctx.alloc_tensors(&graph, &saved, &meta_binding, &state);
 
     let upload = ctx
-        .upload(&saved_tensors.seed, &[1_f32; (M * N) as usize])
+        .upload(&saved_tensors.seed, &[1_f32; (M * N) as usize], 0)
         .unwrap();
 
     let schedule = ctx
@@ -429,7 +431,7 @@ fn matmul_chain3_forward_backward() {
     let saved_tensors = ctx.alloc_tensors(&graph, &saved, &meta_binding, &state);
 
     let upload = ctx
-        .upload(&saved_tensors.seed, &[1_f32; (H * H) as usize])
+        .upload(&saved_tensors.seed, &[1_f32; (H * H) as usize], 0)
         .unwrap();
 
     let schedule = ctx
@@ -567,7 +569,7 @@ fn matmul_sub_forward_backward() {
     let saved_tensors = ctx.alloc_tensors(&graph, &saved, &meta_binding, &state);
 
     let upload = ctx
-        .upload(&saved_tensors.seed, &[1_f32; (M * N) as usize])
+        .upload(&saved_tensors.seed, &[1_f32; (M * N) as usize], 0)
         .unwrap();
 
     let schedule = ctx

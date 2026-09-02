@@ -47,7 +47,7 @@ fn mul_add_f16() {
     let saved_tensors = ctx.alloc_tensors(&graph, &saved, &meta_binding, &state);
 
     let upload = ctx
-        .upload(&saved_tensors.seed, &[f16::from_f32(1.0); 1024])
+        .upload(&saved_tensors.seed, &[f16::from_f32(1.0); 1024], 0)
         .unwrap();
 
     let schedule = ctx

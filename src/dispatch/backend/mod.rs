@@ -157,7 +157,12 @@ impl GpuBackend for NopGpuContext {
 
     fn submit(&self, _submission: Self::SyncSubmissions) -> Self::SubmissionIndex {}
 
-    fn upload(&self, _buffer: &Self::Buffer, _data: &[u8]) -> Result<Self::SubmissionIndex, Error> {
+    fn upload(
+        &self,
+        _buffer: &Self::Buffer,
+        _data: &[u8],
+        _dst_off: u32,
+    ) -> Result<Self::SubmissionIndex, Error> {
         Err(Error {
             msg: "using nop backend",
             kind: ErrorKind::UnsupportedFeature,
