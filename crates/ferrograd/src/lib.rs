@@ -68,6 +68,6 @@ pub mod nn {
     pub use ferrograd_nn::op::*;
 }
 
-#[allow(dead_code)]
-#[doc = include_str!("../README.md")]
-fn test() {}
+// #[allow(dead_code)]
+// #[doc = include_str!("../README.md")]
+// fn test() {}

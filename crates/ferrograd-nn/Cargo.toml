@@ -1,6 +1,6 @@
 [package]
 name = "ferrograd-nn"
-version = "0.1.0"
+version = "0.1.0-beta.1"
 edition = "2024"
 rust-version = "1.89"
 documentation = "https://docs.rs/ferrograd-nn"
@@ -12,4 +12,4 @@ keywords = ["autodiff", "autograd", "tensor", "machine-learning", "deep-learning
 categories = ["compilers", "mathematics"]
 
 [dependencies]
-fused_gpu = { path = "../fused_gpu" }
+fused_gpu = "0.1.0-beta.1"

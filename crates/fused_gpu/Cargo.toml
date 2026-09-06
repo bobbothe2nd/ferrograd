@@ -12,8 +12,6 @@ keywords = ["autodiff", "autograd", "tensor", "machine-learning", "deep-learning
 categories = ["compilers", "mathematics"]
 
 [features]
-default = ["telemetry", "io"]
-
 wgsl = ["dep:wgpu"]
 io = ["dep:crc32fast"]
 telemetry = ["dep:gpu_telemetry"]

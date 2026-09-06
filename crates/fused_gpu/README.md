@@ -4,165 +4,232 @@ Advanced graph-based GPU compiler for linear algebra and AI/ML/DL.
 
 ## Usage
 
-Very basic usage of this crate is shown below:
+Should only be used when implementing custom operations. If creating the model, link `ferrograd-nn`. `ferrograd` does this automatically and has stronger correctness guaraantees.
+
+Optimizer:
 
 ```rust
-use fused_gpu::dispatch::{
-    CompilationOptions, GpuContext,
-    backend::{DType, Graph, LossType, Metadata, OptimState, OptimType},
+pub const STOCHASTIC_GRADIENT_DESCENT: OptimType = OptimType {
+    lower: |kernel, dtype, lr, weight_param, grad_param, gid, _, _| {
+        let grad = kernel.raw.def_var(
+            dtype,
+            ValueState::Immut,
+            Some(Op::ParamLoad {
+                param: grad_param,
+                index: gid,
+            }),
+        );
+
+        let scaled_grad =
+            kernel
+                .raw
+                .def_var(dtype, ValueState::Immut, Some(Op::Mul { a: grad, b: lr }));
+
+        let zero = kernel
+            .raw
+            .def_var(dtype, ValueState::Inline, Some(dtype.constant_float(0.0)?));
+
+        kernel.raw.param_sub(weight_param, gid, scaled_grad);
+        kernel.raw.param_store(grad_param, gid, zero);
+
+        Ok(())
+    },
 };
 
-// used for shapes in graph, must be multiples of 16 right now
-let mut meta = Metadata::new();
-let m = meta.new_field();
-let n = meta.new_field();
-
-// define the optimizer state, should match OptimType
-let state = OptimState::STOCHASTIC_GRADIENT_DESCENT;
-
-// define the graph for automatic kernel fusion
-let mut graph = Graph::new(
-    LossType::MEAN_SQUARED_ERROR,
-    OptimType::STOCHASTIC_GRADIENT_DESCENT,
-);
-
-// define inputs
-let a = graph.input(&[m, n], DType::F32);
-let b = graph.input(&[m, n], DType::F32);
-let c = graph.input(&[m, n], DType::F32);
-
-// define operations here (e.g. ferrograd-nn)
-
-// compute saved nodes ahead of time for compilation
-let saved = graph.compute_saved_nodes();
-
-// validate and sort graph
-graph.validate(meta).unwrap();
-graph.topo_sort().unwrap();
-
-// must rebuild outputs after sorting
-graph.rebuild_outputs();
-
-// default compilation options are usually fine
-let options = CompilationOptions::default();
-
-// create GpuContext, the handle to a GPU device that compiles and launches kernels
-let ctx = GpuContext::new().unwrap();
-let ir = graph.lower(meta, &options, &saved).unwrap();
-let kernels = ctx.compile(&ir, &options).unwrap();
-
-// allocate inputs with the same shapes defined by graph and metadata
-let in_tensors = [
-    ctx.init_tensor_f32(&[32, 32], &[3.0; 1024]),
-    ctx.init_tensor_f32(&[32, 32], &[2.0; 1024]),
-    ctx.init_tensor_f32(&[32, 32], &[1.0; 1024]),
-];
-
-// includes learning rate and shape metadata defined by graph
-let meta_binding = [1e-3_f32.to_bits(), 32, 32];
-assert!(meta.validate_meta(&meta_binding));
-
-// allocate a lot more tensors
-let saved_tensors = ctx.alloc_tensors(&graph, &saved, &meta_binding, &state);
-
-// because this is easier than defining a target and dispatch_loss
-let upload = ctx.upload(&saved_tensors.seed, &[1_f32; 1024]).unwrap();
-
-// scheduling is precomputing everything that doesn't need to be recomputed for every dispatch
-let mut schedule = ctx
-    .schedule(
-        &kernels,
-        &meta_binding,
-        &in_tensors,
-        &saved_tensors,
-        &[],
-        &state,
-    )
-    .unwrap();
-
-// dispatch everything
-let mut state = ctx.prepare_batch();
-
-{
-    let mut pass = ctx.start_batch(&mut state);
-
-    pass.dispatch_forward(&schedule);
-    pass.dispatch_backward(&schedule);
-
-    pass.dispatch_optim::<0>(&mut schedule, &in_tensors[0], 0, &saved_tensors);
-    pass.dispatch_optim::<0>(&mut schedule, &in_tensors[1], 1, &saved_tensors);
-    pass.dispatch_optim::<0>(&mut schedule, &in_tensors[2], 2, &saved_tensors);
-}
-
-// synchronize previous seed upload before launching batch
-upload.sync();
-
-// launch and synchronize batch output
-state.encode().submit().sync();
-
-let mut dst = [0_f32; 1024];
-
-let grad_tensors = &saved_tensors.grad_tensors;
-
-ctx.download(&saved_tensors.forward_out, &mut dst).unwrap();
-assert!(dst.iter().all(|x| *x == 7.0));
-
-ctx.download(&grad_tensors[0], &mut dst).unwrap();
-assert!(dst.iter().all(|x| *x == 0.0));
-
-ctx.download(&grad_tensors[1], &mut dst).unwrap();
-assert!(dst.iter().all(|x| *x == 0.0));
-
-ctx.download(&grad_tensors[2], &mut dst).unwrap();
-assert!(dst.iter().all(|x| *x == 0.0));
-
-ctx.download(&in_tensors[0], &mut dst).unwrap();
-assert!(dst.iter().all(|x| *x == 3.0 - 2e-3));
-
-ctx.download(&in_tensors[1], &mut dst).unwrap();
-assert!(dst.iter().all(|x| *x == 2.0 - 3e-3));
-
-ctx.download(&in_tensors[2], &mut dst).unwrap();
-assert!(dst.iter().all(|x| *x == 1.0 - 1e-3));
-
-// intentionally incorrect target (4 != 7) to produce meaningful gradients
-let target = ctx.init_tensor_f32(&[32, 32], &[4.0; 1024]);
-
-// or dispatch with loss
-let mut state = ctx.prepare_batch();
-
-{
-    let mut pass = ctx.start_batch(&mut state);
-
-    pass.dispatch_forward(&schedule);
-    pass.dispatch_loss(&schedule, &target);
-    pass.dispatch_backward(&schedule);
-
-    // all grads are zero including seed
-    pass.dispatch_optim::<0>(&mut schedule, &in_tensors[0], 0, &saved_tensors);
-    pass.dispatch_optim::<0>(&mut schedule, &in_tensors[1], 1, &saved_tensors);
-    pass.dispatch_optim::<0>(&mut schedule, &in_tensors[2], 2, &saved_tensors);
-}
-
-// launch and synchronize batch output
-state.encode().submit().sync();
+pub const STOCHASTIC_GRADIENT_DESCENT_STATE: OptimState<0> = OptimState { shapes: [] };
 ```
 
-Also supports `f16` and `bf16` on most backends. These are re-exported from `half` in the `tensors` module.
+Loss:
 
-## Operations
+```rust
+pub const MEAN_SQUARED_ERROR: LossType = LossType {
+    lower: |kernel, dtype, pred, target, _, _, _, _| {
+        let diff = kernel.raw.def_var(
+            dtype,
+            ValueState::Immut,
+            Some(Op::Sub { a: pred, b: target }),
+        );
 
-Basic tested operations include:
+        let loss_val =
+            kernel
+                .raw
+                .def_var(dtype, ValueState::Immut, Some(Op::Mul { a: diff, b: diff }));
 
-- `sub`
-- `matmul`
-- `add`
-- `mul`
-- `softmax`
+        let two = kernel
+            .raw
+            .def_var(dtype, ValueState::Inline, Some(dtype.constant_float(2.0)?));
 
-Other unary/binary operations are likely trivially correct but not extensively tested.
+        let grad_val =
+            kernel
+                .raw
+                .def_var(dtype, ValueState::Immut, Some(Op::Mul { a: two, b: diff }));
 
-SGD is supported and tested.
+        Ok((loss_val, grad_val))
+    },
+};
+```
+
+Graph Op:
+
+```rust
+pub fn add<'a>(graph: &mut Graph<'a>, a: NodeId, b: NodeId) -> NodeId {
+    graph.push_node(Node {
+        op: GraphOp::Custom {
+            lower: |eval_node: fn(
+                NodeId,
+                NodeId,
+                &NodeInput,
+                ValueId,
+                &mut Vec<NodeId>,
+                &'a Graph<'a>,
+                &[Option<ParamId>],
+                &[Option<ParamId>],
+                &mut LinkedKernel<'a>,
+                ValueId,
+                ValueId,
+                ValueId,
+                ValueId,
+                u32,
+                ValueId,
+                &[Param],
+                &mut bool,
+                &CompilationOptions,
+            ) -> Result<Vec<NodeId>, Error>,
+                    root: NodeId,
+                    input: NodeId,
+                    resolved: &mut Vec<NodeId>,
+                    backwardness: Option<u8>,
+                    node_id: NodeId,
+                    graph: &'a Graph<'a>,
+                    out: ValueId,
+                    node_params: &[Option<ParamId>],
+                    saved_params: &[Option<ParamId>],
+                    kernel: &mut LinkedKernel<'a>,
+                    base: ValueId,
+                    idx: ValueId,
+                    local_row: ValueId,
+                    local_col: ValueId,
+                    shared_size: u32,
+                    tile_size: ValueId,
+                    params: &[Param],
+                    stable_iteration_space: &mut bool,
+                    options: &CompilationOptions| {
+                let mut deepest = Vec::new();
+                let dtype = graph.nodes[node_id].dtype;
+
+                match backwardness {
+                    None => {
+                        let a = graph.nodes[node_id].inputs[0];
+                        let b = graph.nodes[node_id].inputs[1];
+
+                        let a_val = kernel.raw.def_var(dtype, ValueState::Mut, None);
+
+                        let mut a_deep = eval_node(
+                            root,
+                            input,
+                            &NodeInput::Node(a),
+                            a_val,
+                            resolved,
+                            graph,
+                            node_params,
+                            saved_params,
+                            kernel,
+                            idx,
+                            base,
+                            local_row,
+                            local_col,
+                            shared_size,
+                            tile_size,
+                            params,
+                            stable_iteration_space,
+                            options,
+                        )?;
+
+                        let b_val = kernel.raw.def_var(dtype, ValueState::Mut, None);
+
+                        let mut b_deep = eval_node(
+                            root,
+                            input,
+                            &NodeInput::Node(b),
+                            b_val,
+                            resolved,
+                            graph,
+                            node_params,
+                            saved_params,
+                            kernel,
+                            idx,
+                            base,
+                            local_row,
+                            local_col,
+                            shared_size,
+                            tile_size,
+                            params,
+                            stable_iteration_space,
+                            options,
+                        )?;
+
+                        deepest.append(&mut a_deep);
+                        deepest.append(&mut b_deep);
+
+                        kernel
+                            .raw
+                            .overwrite_var(out, Op::Add { a: a_val, b: b_val });
+                    }
+
+                    Some(0 | 1) => {
+                        let mut deep = eval_node(
+                            root,
+                            input,
+                            &NodeInput::Node(node_id),
+                            out,
+                            resolved,
+                            graph,
+                            node_params,
+                            saved_params,
+                            kernel,
+                            idx,
+                            base,
+                            local_row,
+                            local_col,
+                            shared_size,
+                            tile_size,
+                            params,
+                            stable_iteration_space,
+                            options,
+                        )?;
+
+                        deepest.append(&mut deep);
+                    }
+
+                    _ => {
+                        return Err(Error {
+                            msg: "backwardness must be restricted to input count",
+                            kind: ErrorKind::UnresolvedInput,
+                            ctx: (),
+                        });
+                    }
+                }
+
+                Ok(deepest)
+            },
+            display: |inputs| format!("{:?} + {:?}", inputs[0], inputs[1]),
+            save: |_, _, _, _| {},
+            valid_shape: valid_binary,
+            arity: 2,
+            need_dims: false,
+            stable_iter: true,
+            auto_save: true,
+            computes_gid: true,
+            prefer_separate: false,
+            valid_dispatch: DispatchOptions::Any,
+        },
+        inputs: vec![a, b],
+        outputs: Vec::new(),
+        shape: get_shape(a, b, graph),
+        dtype: graph.nodes[a].dtype,
+    })
+}
+```
 
 ## Backends
 

@@ -5,15 +5,12 @@ use ferrograd::{
     },
     io::BpatHeader,
     nn::{MEAN_SQUARED_ERROR, Optim},
-    tensor::bf16,
+    tensor::f16,
 };
 use gpu_telemetry::monitor::{GpuMonitor, telemetry::Telemetry};
 use rand_core::{Rng, SeedableRng};
 use rand_xorshift::XorShiftRng;
-use std::{
-    array::from_fn,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 const ITERS: usize = 16;
 
@@ -23,11 +20,11 @@ fn main() {
     const K: u32 = 512;
     const H: u32 = 256;
 
-    const A_VAL: bf16 = bf16::from_f32_const(3.0);
-    const B_VAL: bf16 = bf16::from_f32_const(2.0);
-    const C_VAL: bf16 = bf16::from_f32_const(1.0);
-    const D_VAL: bf16 = bf16::from_f32_const(0.5);
-    const E_VAL: bf16 = bf16::from_f32_const(1.0);
+    const A_VAL: f16 = f16::from_f32_const(0.03);
+    const B_VAL: f16 = f16::from_f32_const(0.02);
+    const C_VAL: f16 = f16::from_f32_const(0.01);
+    const D_VAL: f16 = f16::from_f32_const(0.05);
+    const E_VAL: f16 = f16::from_f32_const(1.0);
 
     let mut meta = Metadata::new();
     let m = meta.new_field();
@@ -42,11 +39,11 @@ fn main() {
     {
         let mut graph = graph.define_ops();
 
-        let a = graph.input(&[m, k], DType::F32);
-        let b = graph.input(&[k, n], DType::F32);
-        let c = graph.input(&[h, m], DType::F32);
-        let d = graph.input(&[n, h], DType::F32);
-        let e = graph.input(&[h, h], DType::F32);
+        let a = graph.input(&[m, k], DType::F16);
+        let b = graph.input(&[k, n], DType::F16);
+        let c = graph.input(&[h, m], DType::F16);
+        let d = graph.input(&[n, h], DType::F16);
+        let e = graph.input(&[h, h], DType::F16);
 
         let x = graph.matmul(a, b);
         let y = graph.matmul(c, x);
@@ -66,7 +63,7 @@ fn main() {
         debug: DebugCompilationOptions::empty(),
     };
 
-    let meta_binding = [1e-3_f32.to_bits(), M, N, K, H];
+    let meta_binding = [1e-10_f32.to_bits(), M, N, K, H];
     assert!(meta.validate_meta(&meta_binding));
     let meta_binding = ctx.alloc_meta(&meta_binding);
 
@@ -82,16 +79,17 @@ fn main() {
     let tensor_start = Instant::now();
 
     let in_tensors = ctx
-        .load_tensors("data/v2bf16_test.bpat")
+        .load_tensors("data/v2f16_test.bpat")
         .unwrap_or_else(|_| {
             vec![
-                ctx.init_tensor_bf16([M, K].to_vec(), &[A_VAL; (M * K) as usize]),
-                ctx.init_tensor_bf16([K, N].to_vec(), &[B_VAL; (K * N) as usize]),
-                ctx.init_tensor_bf16([H, M].to_vec(), &[C_VAL; (H * M) as usize]),
-                ctx.init_tensor_bf16([N, H].to_vec(), &[D_VAL; (N * H) as usize]),
-                ctx.init_tensor_bf16([H, H].to_vec(), &[E_VAL; (H * H) as usize]),
+                ctx.init_tensor_f16([M, K].to_vec(), &[A_VAL; (M * K) as usize]),
+                ctx.init_tensor_f16([K, N].to_vec(), &[B_VAL; (K * N) as usize]),
+                ctx.init_tensor_f16([H, M].to_vec(), &[C_VAL; (H * M) as usize]),
+                ctx.init_tensor_f16([N, H].to_vec(), &[D_VAL; (N * H) as usize]),
+                ctx.init_tensor_f16([H, H].to_vec(), &[E_VAL; (H * H) as usize]),
             ]
         });
+
 
     let tensor_elapsed = tensor_start.elapsed();
 
@@ -110,15 +108,19 @@ fn main() {
 
     let mut epoch = 0;
 
+    let mut rng = XorShiftRng::seed_from_u64(0);
+
     loop {
         println!("EPOCH {epoch}:");
 
         let target = {
-            let mut rng = XorShiftRng::seed_from_u64(0);
+            let target = f16::from_f32(
+                2.0 * (rng.next_u32() as f32 / u32::MAX as f32) - 1.0
+            );
 
-            let arr: [bf16; (H * H) as usize] = from_fn(|_| bf16::from_bits(rng.next_u32() as u16));
+            let arr = [target; (H * H) as usize];
 
-            ctx.init_tensor_bf16(vec![H, H], &arr)
+            ctx.init_tensor_f16(vec![H, H], &arr)
         };
 
         let monitor: GpuMonitor<Telemetry> = GpuMonitor::start(Duration::from_millis(10)).unwrap();
@@ -214,7 +216,7 @@ fn main() {
         println!(" MAXIMUM MEMORY BUDGET: {}\n", max_budget);
 
         if epoch % 10 == 9 {
-            ctx.save_tensors("data/v2bf16_test.bpat", &in_tensors, BpatHeader::BpatV2bf16)
+            ctx.save_tensors("data/v2f16_test.bpat", &in_tensors, BpatHeader::BpatV2f16)
                 .unwrap();
         }
 

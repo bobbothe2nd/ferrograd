@@ -1,3 +1,5 @@
+use std::ops::{Index, IndexMut};
+
 use crate::{
     backend::SavedNodes,
     dispatch::{DType, LossType, OptimType},
@@ -8,12 +10,26 @@ use briny::raw::alloc::cast_vec;
 use fused_gpu::{
     dispatch::{
         CompilationOptions,
-        backend::{Graph as InnerGraph, Metadata, kernel::KernelGroup},
+        backend::{Graph as InnerGraph, Metadata, Node, kernel::KernelGroup},
     },
     errors::{Error, GraphErrorContext},
 };
 
 pub struct Graph<'a>(pub(crate) InnerGraph<'a>);
+
+impl<'a> Index<NodeId> for Graph<'a> {
+    type Output = Node<'a>;
+
+    fn index(&self, index: NodeId) -> &Self::Output {
+        &self.0.nodes[index.0]
+    }
+}
+
+impl<'a> IndexMut<NodeId> for Graph<'a> {
+    fn index_mut(&mut self, index: NodeId) -> &mut Self::Output {
+        &mut self.0.nodes[index.0]
+    }
+}
 
 impl<'a> Graph<'a> {
     #[inline]

@@ -4,7 +4,7 @@ use ferrograd::{
         OptCompilationOptions, Schedule, SyncSubmission,
     },
     nn::{MEAN_SQUARED_ERROR, Optim},
-    tensor::bf16,
+    tensor::f16,
 };
 use gpu_telemetry::monitor::{GpuMonitor, telemetry::Telemetry};
 use std::time::{Duration, Instant};
@@ -77,11 +77,11 @@ fn main() {
     const K: u32 = 512;
     const H: u32 = 256;
 
-    const A_VAL: bf16 = bf16::from_f32_const(3.0);
-    const B_VAL: bf16 = bf16::from_f32_const(2.0);
-    const C_VAL: bf16 = bf16::from_f32_const(1.0);
-    const D_VAL: bf16 = bf16::from_f32_const(0.5);
-    const E_VAL: bf16 = bf16::from_f32_const(1.0);
+    const A_VAL: f16 = f16::from_f32_const(3.0);
+    const B_VAL: f16 = f16::from_f32_const(2.0);
+    const C_VAL: f16 = f16::from_f32_const(1.0);
+    const D_VAL: f16 = f16::from_f32_const(0.5);
+    const E_VAL: f16 = f16::from_f32_const(1.0);
 
     let mut meta = Metadata::new();
     let m = meta.new_field();
@@ -96,11 +96,11 @@ fn main() {
     {
         let mut graph = graph.define_ops();
 
-        let a = graph.input(&[m, k], DType::F32);
-        let b = graph.input(&[k, n], DType::F32);
-        let c = graph.input(&[h, m], DType::F32);
-        let d = graph.input(&[n, h], DType::F32);
-        let e = graph.input(&[h, h], DType::F32);
+        let a = graph.input(&[m, k], DType::F16);
+        let b = graph.input(&[k, n], DType::F16);
+        let c = graph.input(&[h, m], DType::F16);
+        let d = graph.input(&[n, h], DType::F16);
+        let e = graph.input(&[h, h], DType::F16);
 
         let x = graph.matmul(a, b);
         let y = graph.matmul(c, x);
@@ -136,11 +136,11 @@ fn main() {
     let tensor_start = Instant::now();
 
     let in_tensors = [
-        ctx.init_tensor_bf16([M, K].to_vec(), &[A_VAL; (M * K) as usize]),
-        ctx.init_tensor_bf16([K, N].to_vec(), &[B_VAL; (K * N) as usize]),
-        ctx.init_tensor_bf16([H, M].to_vec(), &[C_VAL; (H * M) as usize]),
-        ctx.init_tensor_bf16([N, H].to_vec(), &[D_VAL; (N * H) as usize]),
-        ctx.init_tensor_bf16([H, H].to_vec(), &[E_VAL; (H * H) as usize]),
+        ctx.init_tensor_f16([M, K].to_vec(), &[A_VAL; (M * K) as usize]),
+        ctx.init_tensor_f16([K, N].to_vec(), &[B_VAL; (K * N) as usize]),
+        ctx.init_tensor_f16([H, M].to_vec(), &[C_VAL; (H * M) as usize]),
+        ctx.init_tensor_f16([N, H].to_vec(), &[D_VAL; (N * H) as usize]),
+        ctx.init_tensor_f16([H, H].to_vec(), &[E_VAL; (H * H) as usize]),
     ];
 
     ctx.upload(&saved_tensors.seed, &[1_f32; (H * H) as usize], 0)
