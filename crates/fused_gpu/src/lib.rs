@@ -1,0 +1,38 @@
+//! `fused_gpu` implements optimized GPU kernels for almost any operation.
+//!
+//! It supports CUDA, ROCM, and WGSL. It will compile anything the feature set describes:
+//!
+//! - `wgsl`: Enable WGSL support
+//! - `io`: Enable support for I/O (`bpat`)
+//! - `telemetry`: Cleans `gpu_telemetry` error handling
+//!
+//! You can also use custom backends.
+
+#![forbid(clippy::unimplemented)]
+#![forbid(clippy::print_stderr)]
+#![forbid(clippy::print_stdout)]
+#![forbid(clippy::approx_constant)]
+#![deny(clippy::pedantic)]
+#![allow(clippy::too_many_lines)]
+#![allow(clippy::similar_names)]
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_lossless)]
+#![allow(clippy::missing_errors_doc)]
+#![deny(clippy::nursery)]
+#![deny(clippy::all)]
+#![allow(clippy::type_complexity)]
+#![allow(clippy::too_many_arguments)]
+#![forbid(clippy::unwrap_used)]
+#![forbid(clippy::expect_used)]
+#![forbid(clippy::panic)]
+#![forbid(clippy::std_instead_of_core)]
+#![forbid(unsafe_code)]
+
+pub mod dispatch;
+
+#[cfg(feature = "io")]
+pub mod io;
+
+pub mod errors;
+
+pub mod tensor;

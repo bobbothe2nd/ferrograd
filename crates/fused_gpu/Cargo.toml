@@ -1,0 +1,88 @@
+[package]
+name = "fused_gpu"
+version = "0.1.0-beta.1"
+edition = "2024"
+rust-version = "1.89"
+documentation = "https://docs.rs/fused_gpu"
+repository = "https://github.com/bobbothe2nd/ferrograd"
+readme = "README.md"
+description = "GPU graph compilation to fuse linear tensor operations"
+license = "MIT"
+keywords = ["autodiff", "autograd", "tensor", "machine-learning", "deep-learning"]
+categories = ["compilers", "mathematics"]
+
+[features]
+default = ["telemetry", "io"]
+
+wgsl = ["dep:wgpu"]
+io = ["dep:crc32fast"]
+telemetry = ["dep:gpu_telemetry"]
+
+[dependencies]
+gpu_telemetry = { version = "0.2.0", optional = true }
+pollster = "0.4.0"
+briny = { version = "0.8.1", features = ["half"] }
+bitflags = "2.13.1"
+half = "2"
+num-traits = "0.2.19"
+crc32fast = { version = "1.5.1", optional = true }
+
+[target.'cfg(target_os = "windows")'.dependencies.wgpu]
+version = "30"
+default-features = false
+features = ["wgsl", "dx12", "vulkan"]
+optional = true
+
+[target.'cfg(target_os = "macos")'.dependencies.wgpu]
+version = "30"
+default-features = false
+features = ["wgsl", "metal", "vulkan-portability", "angle"]
+optional = true
+
+[target.'cfg(target_os = "linux")'.dependencies.wgpu]
+version = "30"
+default-features = false
+features = ["wgsl", "vulkan", "gles"]
+optional = true
+
+[target.'cfg(any(target_arch = "wasm32", target_arch = "wasm64", target_os = "wasi"))'.dependencies.wgpu]
+version = "30"
+default-features = false
+features = ["wgsl", "webgpu", "webgl"]
+optional = true
+
+[target.'cfg(not(any(target_arch = "wasm32", target_arch = "wasm64", target_os = "wasi", target_os = "linux", target_os = "macos", target_family = "windows")))'.dependencies.wgpu]
+version = "30"
+default-features = false
+features = [
+    "std",
+    "parking_lot",
+    "vulkan",
+    "vulkan-portability",
+    "angle",
+    "gles",
+    "dx12",
+    "metal",
+    "wgsl",
+    "webgpu",
+]
+optional = true
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs", "--generate-link-to-definition"]
+targets = [
+  "aarch64-apple-ios",
+  "aarch64-linux-android",
+  "wasm32-wasip1",
+  "x86_64-apple-darwin",
+  "x86_64-pc-windows-gnu",
+  "x86_64-pc-windows-msvc",
+  "x86_64-unknown-dragonfly",
+  "x86_64-unknown-freebsd",
+  "x86_64-unknown-illumos",
+  "x86_64-unknown-linux-gnu",
+  "x86_64-unknown-netbsd",
+  "x86_64-unknown-openbsd",
+  "x86_64-unknown-hermit",
+]

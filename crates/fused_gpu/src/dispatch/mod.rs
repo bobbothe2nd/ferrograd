@@ -1,0 +1,859 @@
+//! Full dispatch of math operations and GPU contVec;
+
+use crate::{
+    dispatch::backend::{
+        Graph, MetaId, NodeId, OptimState, Param, StateDim,
+        kernel::{Dependencies, RawKernel, Redirect, SaveIndicator},
+    },
+    errors::Error,
+    tensor::{Tensor, ToBuffer, build_dims},
+};
+use briny::{
+    raw::cast::{slice_to_bytes, slice_to_bytes_mut},
+    traits::Pod,
+};
+use core::fmt::Debug;
+use half::slice::HalfFloatSliceExt;
+use std::{vec, vec::Vec};
+
+pub mod backend;
+
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+pub enum PollStatus {
+    QueueEmpty,
+    Failed,
+    Pending,
+    Ready,
+}
+
+#[derive(Hash, PartialEq, Eq)]
+pub struct CompilationOptions {
+    pub target: TargetCompilationOptions,
+    pub debug: DebugCompilationOptions,
+    pub opt: OptCompilationOptions,
+}
+
+#[derive(Debug, Hash, PartialEq, Eq)]
+pub struct TargetCompilationOptions {
+    pub flags: TargetFlags,
+}
+
+bitflags::bitflags! {
+    #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+    pub struct TargetFlags: u8 {
+        /// Support for linear algebra accelerator (e.g. tensor core via `wmma`)
+        const LIN_ACC = 1 << 0;
+
+        /// Links a BLAS library (e.g. `cuBLAS`)
+        const BLAS_LIB = 1 << 1;
+
+        /// Support for asynchronous memory load
+        const ASYNC_MEM_LOAD = 1 << 2;
+
+        /// Support for asynchronous memory store
+        const ASYNC_MEM_STORE = 1 << 3;
+    }
+}
+
+bitflags::bitflags! {
+    #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+    pub struct DebugCompilationOptions: u8 {
+        /// Formats intermediate representation
+        const PRETTY_PRINT_IR = 1 << 0;
+    }
+}
+
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+pub struct OptCompilationOptions {
+    /// Sets tile size or block size.
+    pub tile_size: u32,
+
+    /// Sets the amount of passes to optimize each kernel.
+    ///
+    /// The compiler will quickly run out of optimizations if this is set too high.
+    pub passes: u8,
+
+    /// Defines the set of optimizations the compiler will run each pass.
+    pub flags: OptFlags,
+}
+
+impl Default for OptCompilationOptions {
+    fn default() -> Self {
+        Self {
+            tile_size: 16,
+            passes: 3,
+            flags: OptFlags::all(),
+        }
+    }
+}
+
+bitflags::bitflags! {
+    #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+    pub struct OptFlags: u16 {
+        /// Enables or disables dead code elimination.
+        ///
+        /// `let useless = 1234;` -> nothing
+        const DEAD_CODE = 1 << 0;
+
+        /// Enables or disables constant folding.
+        ///
+        /// `2*2` -> `4`
+        const CONST_FOLD = 1 << 1;
+
+        /// Converts assignments to op-assignments.
+        ///
+        /// `a = b + a;` -> `a += b;`
+        const OP_ASSIGN = 1 << 2;
+
+        /// Applies the identity prperty to arithmetic.
+        ///
+        /// `x*1` or `x/1` or `x+0` or `x-0` -> `x`
+        const IDENTITY = 1 << 3;
+
+        /// Converts constant division statements to multiplication.
+        ///
+        /// `x/2` -> `x*0.5`
+        const DIV_CONST = 1 << 4;
+
+        /// Fuses multiply-add operations.
+        ///
+        /// `a*b+c` -> `fma(a,b,c)`
+        const MUL_ADD = 1 << 5;
+
+        /// Moves operations that dont depend on the state of a loop to before the loop started.
+        ///
+        /// `loop { a = b; }` -> `a = b; loop {  }`
+        const LOOP_STATELESS = 1 << 6;
+
+        /// Removes empty scopes (loop, if) to simplify code.
+        ///
+        /// `loop {  }` -> nothing
+        const EMPTY_SCOPE = 1 << 7;
+
+        /// Changes mutable variables to immutable variables if they are never mutated.
+        ///
+        /// `let mut a = 123;` -> `let a = 123;`
+        const UNUSED_MUT = 1 << 8;
+
+        /// Removes copies of immutable variables, replacing their usages directly with the original variable.
+        ///
+        /// `let a = 123; let b = a; let c = b - 1;` -> `let a = 123; let c = a - 1;`
+        const COPY_IMMUT = 1 << 9;
+
+        /// Removes needless late intialization of mutable variables.
+        ///
+        /// `let mut a; a = 2;` -> `let mut a = 2;`
+        const LATE_INIT = 1 << 10;
+    }
+}
+
+pub trait GpuBufferBackend: Debug {
+    fn size(&self) -> u32;
+
+    fn size_bytes(&self) -> u32;
+}
+
+pub trait GpuKernelBackend {
+    fn iteration_space(&self) -> &[MetaId];
+    fn block(&self) -> &[u32; 3];
+}
+
+pub trait GpuBackend: Sized {
+    type Buffer: GpuBufferBackend;
+    type Kernel: GpuKernelBackend;
+    type Batcher<'a>;
+    type BatchState;
+    type SubmissionIndex;
+    type ParamLayout;
+    type Schedule;
+    type SyncSubmissions;
+
+    /// The target-specific configuration for the compiler.
+    fn target_spec(&self) -> TargetCompilationOptions;
+
+    /// Allocates an uninitialized GPU buffer with the size `len` in bytes.
+    fn alloc(&self, len: usize) -> Self::Buffer;
+
+    /// Allocates a slice of `u8` (to be reinterpreted as larger datatypes).
+    fn alloc_init(&self, data: &[u8]) -> Self::Buffer;
+
+    /// Allocates a slice of `u32` on the GPU.
+    ///
+    /// This allocation is often small and uniform.
+    fn alloc_meta(&self, data: &[u32]) -> Self::Buffer;
+
+    /// Copies the content of a CPU buffer to a GPU buffer at offset `dst_off`.
+    ///
+    /// # Errors
+    ///
+    /// Should return an [`ErrorKind::FailedBufferCopy`](`crate::errors::ErrorKind::FailedBufferCopy`).
+    fn upload(
+        &self,
+        buffer: &Self::Buffer,
+        data: &[u8],
+        dst_off: u32,
+    ) -> Result<Self::SubmissionIndex, Error>;
+
+    /// Copies the content of one buffer to another.
+    ///
+    /// # Errors
+    ///
+    /// Should return an [`ErrorKind::FailedBufferCopy`](`crate::errors::ErrorKind::FailedBufferCopy`).
+    fn pipe(&self, src: &Self::Buffer, dst: &Self::Buffer) -> Result<Self::SubmissionIndex, Error>;
+
+    /// Copies the content of a GPU buffer to a CPU buffer.
+    ///
+    /// # Errors
+    ///
+    /// Should return an [`ErrorKind::FailedBufferCopy`](`crate::errors::ErrorKind::FailedBufferCopy`).
+    fn download(&self, buffer: &Self::Buffer, out: &mut [u8]) -> Result<(), Error>;
+
+    /// Compiles the `RawKernel` (containing ops+vars) to a GPU kernel ([`Self::Kernel`]).
+    ///
+    /// # Errors
+    ///
+    /// For an invalid kernel, param layout, or compilation options and all related errors.
+    fn compile(
+        &self,
+        src: &RawKernel,
+        params: &[Param],
+        options: &CompilationOptions,
+    ) -> Result<Self::Kernel, Error>;
+
+    fn schedule(
+        &self,
+        kernels: Vec<Dependencies<Redirect<(Self::Kernel, NodeId, &[bool])>>>,
+        bindings: &[&Self::Buffer],
+        meta: &[u32],
+    ) -> Result<Self::Schedule, Error>;
+
+    fn dispatch_kernel(
+        &self,
+        batcher: &mut Self::Batcher<'_>,
+        kernel: &Self::Kernel,
+        wg: [u32; 3],
+        bindings: &[&Self::Buffer],
+    );
+
+    fn dispatch_schedule(&self, batcher: &mut Self::Batcher<'_>, schedule: &Self::Schedule);
+
+    fn sync(&self, submission_index: Self::SubmissionIndex);
+
+    fn prepare_batch(&self) -> Self::BatchState;
+
+    fn start_batch<'a>(&self, state: &'a mut Self::BatchState) -> Self::Batcher<'a>;
+
+    fn encode(&self, state: Self::BatchState) -> Self::SyncSubmissions;
+
+    fn submit(&self, submission: Self::SyncSubmissions) -> Self::SubmissionIndex;
+
+    fn poll(&self) -> PollStatus;
+}
+
+/// Allocate a buffer on the GPU.
+pub fn gpu_alloc<B: GpuBackend>(context: &B, len: usize) -> GpuBuffer<B> {
+    GpuBuffer {
+        inner: context.alloc(len),
+    }
+}
+
+/// Allocate a buffer on the GPU and copy CPU memory into it.
+pub fn gpu_alloc_init<T: Pod, B: GpuBackend>(context: &B, data: &[T]) -> GpuBuffer<B> {
+    GpuBuffer {
+        inner: context.alloc_init(slice_to_bytes(data)),
+    }
+}
+
+/// Generic GPU buffer for any backend.
+#[repr(transparent)]
+#[derive(Debug, Clone)]
+pub struct GpuBuffer<B: GpuBackend = backend::GpuContext> {
+    pub(crate) inner: B::Buffer,
+}
+
+impl<B: GpuBackend> GpuBuffer<B> {
+    /// Requests the length of the buffer in 32-bit chunks (`f32`, `u32`, etc.).
+    pub fn size(&self) -> u32 {
+        self.inner.size()
+    }
+
+    /// Requests the length of the buffer in bytes.
+    pub fn size_bytes(&self) -> u32 {
+        self.inner.size_bytes()
+    }
+}
+
+/// A group of compiled kernels including all required metadata.
+///
+/// It includes the kernels of the forward, backward, and loss passes, the order
+/// in which to execute them, and the parameters they use.
+#[derive(Debug)]
+pub struct KernelGroup<'a, B: GpuBackend = backend::GpuContext> {
+    pub(crate) forward: Vec<Dependencies<Redirect<(B::Kernel, usize, &'a [bool])>>>,
+    pub(crate) backward: Vec<Dependencies<Redirect<(B::Kernel, usize, &'a [bool])>>>,
+    pub(crate) loss: B::Kernel,
+    pub(crate) optim: B::Kernel,
+}
+
+/// Handle to a series of GPU submissions.
+#[must_use]
+pub struct SubmissionIndex<'a, B: GpuBackend = backend::GpuContext>(
+    B::SubmissionIndex,
+    &'a GpuContext<B>,
+);
+
+impl<B: GpuBackend> SubmissionIndex<'_, B> {
+    pub fn sync(self) {
+        self.1.inner.sync(self.0);
+    }
+}
+
+/// Handle to a series of unsubmitted GPU kernels.
+#[must_use]
+pub struct SyncSubmission<'a, B: GpuBackend = backend::GpuContext>(
+    B::SyncSubmissions,
+    &'a GpuContext<B>,
+);
+
+impl<'a, B: GpuBackend> SyncSubmission<'a, B> {
+    pub fn submit(self) -> SubmissionIndex<'a, B> {
+        SubmissionIndex(self.1.inner.submit(self.0), self.1)
+    }
+}
+
+#[must_use]
+pub struct BatchState<'a, B: GpuBackend = backend::GpuContext>(B::BatchState, &'a GpuContext<B>);
+
+impl<'a, B: GpuBackend> BatchState<'a, B> {
+    pub fn encode(self) -> SyncSubmission<'a, B> {
+        SyncSubmission(self.1.inner.encode(self.0), self.1)
+    }
+}
+
+/// Schedule used to improve performance by caching critical launch information.
+pub struct Schedule<'a, B: GpuBackend = backend::GpuContext> {
+    forward: B::Schedule,
+    backward: B::Schedule,
+    loss: LossSchedule<'a, B>,
+    optim: OptimSchedule<'a, B>,
+}
+
+struct LossSchedule<'a, B: GpuBackend> {
+    grid: [u32; 3],
+    bindings: [&'a B::Buffer; 5],
+    kernel: B::Kernel,
+}
+
+struct OptimSchedule<'a, B: GpuBackend> {
+    bindings: Vec<&'a B::Buffer>,
+    kernel: B::Kernel,
+    state: &'a [B::Buffer],
+}
+
+/// Generic GPU context storing a handle to the device and shaders.
+///
+/// Perhaps most important structure in all of Fused GPU this is. Without it,
+/// you couldn't compile kernels, execute kernels, create tensors, copy data.
+#[repr(transparent)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GpuContext<B: GpuBackend = backend::GpuContext> {
+    pub(crate) inner: B,
+}
+
+impl GpuContext<backend::GpuContext> {
+    /// Blocking creation of the context by searching for GPU.
+    ///
+    /// # Errors
+    ///
+    /// Failure is platform-specific and backend-dependent. It is likely a result of
+    /// not finding a supported device. Errors must be handled properly in critical code.
+    pub fn new() -> Result<Self, Error> {
+        Ok(Self {
+            inner: pollster::block_on(backend::GpuContext::new())?,
+        })
+    }
+
+    /// Non-blocking creation of the context by searching for GPU.
+    ///
+    /// # Errors
+    ///
+    /// Failure is platform-specific and backend-dependent. It is likely a result of
+    /// not finding a supported device. Errors must be handled properly in critical code.
+    pub async fn new_nonblocking() -> Result<Self, Error> {
+        Ok(Self {
+            inner: backend::GpuContext::new().await?,
+        })
+    }
+}
+
+impl<B: GpuBackend> GpuContext<B> {
+    /// Wrapping the inner context.
+    pub const fn new_with_context(ctx: B) -> Self {
+        Self { inner: ctx }
+    }
+
+    pub fn detect_target(&self) -> TargetCompilationOptions {
+        self.inner.target_spec()
+    }
+
+    /// Compiles a graph into a kernels.
+    ///
+    /// # Errors
+    ///
+    /// Failure is platform-specific and backend-dependent but often a result of invalid input.
+    /// Regardless, errors must be handled properly in critical code.
+    pub fn compile<'a>(
+        &self,
+        ir: &'a backend::kernel::KernelGroup<'a>,
+        options: &CompilationOptions,
+    ) -> Result<KernelGroup<'a, B>, Error> {
+        let forward = ir
+            .forward
+            .kernels
+            .iter()
+            .map(|kernel| {
+                let dep = kernel.dep.clone();
+
+                let compiled = match &kernel.val {
+                    Redirect::Unmasked(kernel) => {
+                        let params = ir
+                            .forward
+                            .params
+                            .iter()
+                            .enumerate()
+                            .filter_map(
+                                |(i, param)| if kernel.params[i] { Some(*param) } else { None },
+                            )
+                            .collect::<Vec<_>>();
+
+                        Redirect::Unmasked((
+                            self.inner.compile(&kernel.raw, &params, options)?,
+                            kernel.raw.root,
+                            kernel.params.as_slice(),
+                        ))
+                    }
+                    Redirect::Redirected(idx) => Redirect::Redirected(*idx),
+                };
+
+                Ok(Dependencies { val: compiled, dep })
+            })
+            .collect::<Result<
+                Vec<Dependencies<Redirect<(<B as GpuBackend>::Kernel, usize, &'a [bool])>>>,
+                Error,
+            >>()?;
+
+        let backward = ir
+            .backward
+            .kernels
+            .iter()
+            .map(|kernel| {
+                let dep = kernel.dep.clone();
+
+                let compiled = match &kernel.val {
+                    Redirect::Unmasked(kernel) => {
+                        let params = ir
+                            .backward
+                            .params
+                            .iter()
+                            .enumerate()
+                            .filter_map(
+                                |(i, param)| if kernel.params[i] { Some(*param) } else { None },
+                            )
+                            .collect::<Vec<_>>();
+
+                        Redirect::Unmasked((
+                            self.inner.compile(&kernel.raw, &params, options)?,
+                            kernel.raw.root,
+                            kernel.params.as_slice(),
+                        ))
+                    }
+                    Redirect::Redirected(idx) => Redirect::Redirected(*idx),
+                };
+
+                Ok(Dependencies { val: compiled, dep })
+            })
+            .collect::<Result<
+                Vec<Dependencies<Redirect<(<B as GpuBackend>::Kernel, usize, &'a [bool])>>>,
+                Error,
+            >>()?;
+
+        let loss = self.inner.compile(&ir.loss.raw, &ir.loss.params, options)?;
+        let optim = self
+            .inner
+            .compile(&ir.optim.raw, &ir.optim.params, options)?;
+
+        Ok(KernelGroup {
+            forward,
+            backward,
+            loss,
+            optim,
+        })
+    }
+
+    /// Copies the content of a GPU buffer into a CPU buffer.
+    ///
+    /// # Errors
+    ///
+    /// Failure is platform-specific and backend-dependent. It might only return an error
+    /// if buffer lengths are unequal, but its behavior should not be assumed. Errors
+    /// must be handled properly in critical code.
+    pub fn download<T: Pod, S: ToBuffer<B>>(&self, tensor: &S, dst: &mut [T]) -> Result<(), Error> {
+        self.inner
+            .download(tensor.as_buffer(), slice_to_bytes_mut(dst))
+    }
+
+    /// Copies the content of a CPU buffer into GPU buffer.
+    ///
+    /// # Errors
+    ///
+    /// Failure is platform-specific and backend-dependent. It might only return an error
+    /// if buffer lengths are unequal, but its behavior should not be assumed. Errors
+    /// must be handled properly in critical code.
+    pub fn upload<T: Pod, S: ToBuffer<B>>(
+        &self,
+        tensor: &S,
+        dst: &[T],
+        dst_off: u32,
+    ) -> Result<SubmissionIndex<'_, B>, Error> {
+        self.inner
+            .upload(tensor.as_buffer(), slice_to_bytes(dst), dst_off)
+            .map(|x| SubmissionIndex(x, self))
+    }
+
+    /// Copies the content of one buffer to another without mutating the source.
+    ///
+    /// This is faster than chaining [`Self::download`] into [`Self::upload`] because it
+    /// bypasses CPU memory.
+    ///
+    /// # Errors
+    ///
+    /// Failure is platform-specific and backend-dependent. It might only return an error
+    /// if buffer lengths are unequal, but its behavior should not be assumed. Errors
+    /// must be handled properly in critical code.
+    pub fn pipe<S1: ToBuffer<B>, S2: ToBuffer<B>>(
+        &self,
+        src: &S1,
+        dst: &S2,
+    ) -> Result<SubmissionIndex<'_, B>, Error> {
+        self.inner
+            .pipe(src.as_buffer(), dst.as_buffer())
+            .map(|x| SubmissionIndex(x, self))
+    }
+
+    pub fn prepare_batch(&self) -> BatchState<'_, B> {
+        BatchState(self.inner.prepare_batch(), self)
+    }
+
+    pub fn start_batch<'a>(&'a self, state: &'a mut BatchState<B>) -> Batcher<'a, B> {
+        Batcher(self.inner.start_batch(&mut state.0), self)
+    }
+
+    pub fn alloc_tensors<const N: usize>(
+        &self,
+        graph: &Graph<'_>,
+        saved: &[SaveIndicator],
+        meta: &[u32],
+        state: &OptimState<N>,
+    ) -> AllocTensors<B> {
+        let mut forward_saved = Vec::new();
+        let mut grad_tensors = Vec::new();
+        let mut state_tensors = Vec::new();
+
+        for (idx, save) in saved.iter().enumerate() {
+            let node = &graph.nodes[idx];
+            let node_shape = &node.shape;
+            let num_shape = build_dims(node_shape, meta);
+
+            let len = (num_shape.iter().product::<u32>() as usize) * node.dtype.size();
+
+            if save.is_defined_in_forward() {
+                let buf = self.inner.alloc(len);
+                forward_saved.push(buf);
+            }
+
+            if save.is_defined_in_backward() {
+                let buf = self.inner.alloc(len);
+                grad_tensors.push(buf);
+
+                state_tensors.reserve(N);
+
+                for state_t in 0..N {
+                    let len = match state.shapes[state_t] {
+                        StateDim::Const(value) => value as usize,
+                        StateDim::GradRelative(value) => len * (value as usize),
+                    };
+                    let buf = self.inner.alloc(len);
+
+                    state_tensors.push(buf);
+                }
+            }
+        }
+
+        let meta_buffer = self.inner.alloc_meta(meta);
+
+        let node_shape = &graph.nodes[graph.nodes.len() - 1].shape;
+        let node_dtype = &graph.nodes[graph.nodes.len() - 1].dtype;
+        let shape = build_dims(node_shape, meta);
+        let len = shape.iter().product::<u32>() as usize * node_dtype.size();
+
+        let forward_out = self.inner.alloc(len);
+        let loss_t = self.inner.alloc(len);
+        let seed = self.inner.alloc(len);
+
+        AllocTensors {
+            meta: meta_buffer,
+            forward_saved,
+            grad_tensors,
+            forward_out,
+            seed,
+            state: state_tensors,
+            loss_t: Tensor {
+                shape,
+                data: GpuBuffer { inner: loss_t },
+            },
+        }
+    }
+
+    pub fn new_tensor<const N: u32>(&self, shape: Vec<u32>) -> Tensor<B> {
+        let len = (shape.iter().product::<u32>() * const { N / 8 }) as usize;
+        let data = self.inner.alloc(len);
+        Tensor {
+            shape,
+            data: GpuBuffer { inner: data },
+        }
+    }
+
+    pub fn init_tensor_f64(&self, shape: Vec<u32>, data: &[f64]) -> Tensor<B> {
+        debug_assert_eq!(
+            shape.iter().product::<u32>(),
+            data.len() as u32,
+            "shape product (left) and data length (right) mismatch"
+        );
+
+        let data = gpu_alloc_init(&self.inner, data);
+        Tensor { shape, data }
+    }
+
+    pub fn init_tensor_f32(&self, shape: Vec<u32>, data: &[f32]) -> Tensor<B> {
+        debug_assert_eq!(
+            shape.iter().product::<u32>(),
+            data.len() as u32,
+            "shape product (left) and data length (right) mismatch"
+        );
+
+        let data = gpu_alloc_init(&self.inner, data);
+        Tensor { shape, data }
+    }
+
+    pub fn init_tensor_f16(&self, shape: Vec<u32>, data: &[half::f16]) -> Tensor<B> {
+        debug_assert_eq!(
+            shape.iter().product::<u32>(),
+            data.len() as u32,
+            "shape product (left) and data length (right) mismatch"
+        );
+
+        let data_u16 = data.reinterpret_cast();
+        let data = gpu_alloc_init(&self.inner, data_u16);
+
+        Tensor { shape, data }
+    }
+
+    pub fn init_tensor_bf16(&self, shape: Vec<u32>, data: &[half::bf16]) -> Tensor<B> {
+        debug_assert_eq!(
+            shape.iter().product::<u32>(),
+            data.len() as u32,
+            "shape product (left) and data length (right) mismatch"
+        );
+
+        let data_u16 = data.reinterpret_cast();
+        let data = gpu_alloc_init(&self.inner, data_u16);
+
+        Tensor { shape, data }
+    }
+
+    /// Allocates an empty one-hot vector.
+    pub fn new_onehot(&self, classes: u32) -> Tensor<B> {
+        let data = gpu_alloc(&self.inner, classes as usize);
+        Tensor {
+            data,
+            shape: vec![classes],
+        }
+    }
+
+    /// Allocates a new one-hot vector with the defined classes.
+    pub fn new_onehot_init(&self, indices: &[u32]) -> Tensor<B> {
+        let data = gpu_alloc_init(&self.inner, indices);
+        Tensor {
+            data,
+            shape: vec![indices.len() as u32],
+        }
+    }
+
+    pub fn schedule<'a, const N: usize>(
+        &self,
+        kernels: KernelGroup<B>,
+        meta: &[u32],
+        in_tensors: &'a [Tensor<B>],
+        alloc_tensors: &'a AllocTensors<B>,
+        state: &'a [B::Buffer],
+    ) -> Result<Schedule<'a, B>, Error>
+    where
+        B::Buffer: Sized,
+    {
+        let mut bindings = Vec::new();
+
+        bindings.push(&alloc_tensors.meta);
+
+        alloc_tensors
+            .forward_saved
+            .iter()
+            .for_each(|t| bindings.push(t));
+        for t in in_tensors {
+            bindings.push(&t.data.inner);
+        }
+
+        bindings.push(&alloc_tensors.forward_out);
+
+        let forward = self.inner.schedule(kernels.forward, &bindings, meta)?;
+
+        bindings.truncate(1);
+
+        bindings.push(&alloc_tensors.seed);
+
+        alloc_tensors
+            .grad_tensors
+            .iter()
+            .for_each(|t| bindings.push(t));
+        for t in in_tensors {
+            bindings.push(&t.data.inner);
+        }
+        alloc_tensors
+            .forward_saved
+            .iter()
+            .for_each(|t| bindings.push(t));
+
+        let backward = self.inner.schedule(kernels.backward, &bindings, meta)?;
+
+        let grid = alloc_tensors.loss_t.calc_grid(*kernels.loss.block());
+
+        let bindings = [
+            &alloc_tensors.meta,
+            &alloc_tensors.loss_t.data.inner,
+            &alloc_tensors.seed,
+            &alloc_tensors.forward_out,
+            &alloc_tensors.seed,
+        ];
+
+        let loss = LossSchedule {
+            grid,
+            bindings,
+            kernel: kernels.loss,
+        };
+
+        let mut bindings = vec![
+            &alloc_tensors.meta,
+            &alloc_tensors.meta,
+            &alloc_tensors.meta,
+        ];
+
+        for _ in 0..N {
+            bindings.push(&alloc_tensors.meta);
+        }
+
+        let optim = OptimSchedule {
+            bindings,
+            kernel: kernels.optim,
+            state,
+        };
+
+        Ok(Schedule {
+            forward,
+            backward,
+            loss,
+            optim,
+        })
+    }
+
+    #[cfg(feature = "io")]
+    pub fn save_tensors<P: AsRef<std::path::Path>>(
+        &self,
+        path: P,
+        tensors: &[Tensor<B>],
+        header: crate::io::BpatHeader,
+    ) -> Result<(), Error<crate::io::SerialTensorError>> {
+        crate::io::save_tensors(path, self, tensors, header)
+    }
+
+    #[cfg(feature = "io")]
+    pub fn load_tensors<P: AsRef<std::path::Path>>(
+        &self,
+        path: P,
+    ) -> Result<Vec<Tensor<B>>, Error<crate::io::SerialTensorError>> {
+        crate::io::load_tensors(path, self)
+    }
+}
+
+#[must_use]
+pub struct Batcher<'a, B: GpuBackend = backend::GpuContext>(B::Batcher<'a>, &'a GpuContext<B>);
+
+impl<B: GpuBackend> Batcher<'_, B> {
+    pub fn dispatch_forward(&mut self, schedule: &Schedule<'_, B>) {
+        self.1
+            .inner
+            .dispatch_schedule(&mut self.0, &schedule.forward);
+    }
+
+    pub fn dispatch_backward(&mut self, schedule: &Schedule<'_, B>) {
+        self.1
+            .inner
+            .dispatch_schedule(&mut self.0, &schedule.backward);
+    }
+
+    pub fn dispatch_loss<T: ToBuffer<B>>(&mut self, schedule: &mut Schedule<'_, B>, target: &T) {
+        let mut bindings = schedule.loss.bindings;
+        bindings[4] = target.as_buffer();
+
+        self.1.inner.dispatch_kernel(
+            &mut self.0,
+            &schedule.loss.kernel,
+            schedule.loss.grid,
+            &bindings,
+        );
+    }
+
+    pub fn dispatch_optim<const N: usize>(
+        &mut self,
+        schedule: &mut Schedule<'_, B>,
+        weight: &Tensor<B>,
+        grad: usize,
+        tensors: &AllocTensors<B>,
+    ) {
+        let grid = weight.calc_grid(*schedule.optim.kernel.block());
+
+        let mut bindings = schedule.optim.bindings.clone();
+
+        bindings[1] = weight.as_buffer();
+        bindings[2] = &tensors.grad_tensors[grad];
+
+        for state_t in 0..N {
+            bindings[3 + state_t] = &schedule.optim.state[state_t];
+        }
+
+        self.1
+            .inner
+            .dispatch_kernel(&mut self.0, &schedule.optim.kernel, grid, &bindings);
+    }
+}
+
+#[derive(Debug)]
+pub struct AllocTensors<B: GpuBackend = backend::GpuContext> {
+    pub meta: B::Buffer,
+    pub forward_saved: Vec<B::Buffer>,
+    pub grad_tensors: Vec<B::Buffer>,
+    pub forward_out: B::Buffer,
+    pub seed: B::Buffer,
+
+    pub state: Vec<B::Buffer>,
+
+    pub loss_t: Tensor<B>,
+}

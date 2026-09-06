@@ -1,0 +1,15 @@
+[package]
+name = "ferrograd-nn"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+documentation = "https://docs.rs/ferrograd-nn"
+repository = "https://github.com/bobbothe2nd/ferrograd"
+readme = "README.md"
+description = "Graph operations implemented for ferrograd+fused_gpu compiler"
+license = "MIT"
+keywords = ["autodiff", "autograd", "tensor", "machine-learning", "deep-learning"]
+categories = ["compilers", "mathematics"]
+
+[dependencies]
+fused_gpu = { path = "../fused_gpu" }

@@ -1,0 +1,49 @@
+[package]
+name = "ferrograd"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+documentation = "https://docs.rs/ferrograd"
+repository = "https://github.com/bobbothe2nd/ferrograd"
+readme = "README.md"
+description = "GPU graph compilation to fuse linear tensor operations"
+license = "MIT"
+keywords = ["autodiff", "autograd", "tensor", "machine-learning", "deep-learning"]
+categories = ["compilers", "mathematics"]
+
+[features]
+default = ["wgsl"]
+
+wgsl = ["fused_gpu/wgsl"]
+
+[dependencies]
+gpu_telemetry = { version = "0.2.0", optional = true }
+ferrograd-nn = { path = "../ferrograd-nn" }
+fused_gpu = { path = "../fused_gpu", default-features = false, features = ["io", "telemetry"] }
+briny = "0.8.1"
+pollster = "1.0.1"
+
+[dev-dependencies]
+gpu_telemetry = "0.2.0"
+rand_core = "0.10.1"
+rand_xorshift = "0.5.0"
+
+[[example]]
+name = "matmul_chain3"
+required-features = ["wgsl"]
+
+[[example]]
+name = "save_load_model"
+required-features = ["wgsl"]
+
+[[test]]
+name = "std_wgsl"
+required-features = []
+
+[[test]]
+name = "nonf32"
+required-features = []
+
+[[test]]
+name = "optim"
+required-features = []
