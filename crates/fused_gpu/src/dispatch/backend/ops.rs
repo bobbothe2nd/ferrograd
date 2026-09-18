@@ -221,27 +221,22 @@ pub enum Op {
         a: ValueId,
         b: ValueId,
     },
-
     Ne {
         a: ValueId,
         b: ValueId,
     },
-
     Lt {
         a: ValueId,
         b: ValueId,
     },
-
     Gt {
         a: ValueId,
         b: ValueId,
     },
-
     Le {
         a: ValueId,
         b: ValueId,
     },
-
     Ge {
         a: ValueId,
         b: ValueId,
@@ -263,23 +258,18 @@ pub enum Op {
     CastF64 {
         id: ValueId,
     },
-
     CastF32 {
         id: ValueId,
     },
-
     CastF16 {
         id: ValueId,
     },
-
     CastBF16 {
         id: ValueId,
     },
-
     CastU32 {
         id: ValueId,
     },
-
     CastI32 {
         id: ValueId,
     },
@@ -299,22 +289,40 @@ pub enum Op {
     ForeverLoopBegin,
 
     Continue,
-
     Break,
 
     IfBegin {
         cond: ValueId,
     },
-
     ElseBegin,
 
     StartScope,
-
     EndScope,
 
     Barrier,
 
     Return,
+
+    /// Tensor/matrix core requires `TargetCompilationOptions::LIN_ACC`
+    Mma {
+        a: ValueId,
+        b: ValueId,
+        acc: ValueId,
+    },
+
+    /// Tensor/matrix core requires `TargetCompilationOptions::LIN_ACC`
+    MmaLoadA {
+        mem: SharedId,
+        row: ValueId,
+        col: ValueId,
+    },
+
+    /// Tensor/matrix core requires `TargetCompilationOptions::LIN_ACC`
+    MmaLoadB {
+        mem: SharedId,
+        row: ValueId,
+        col: ValueId,
+    },
 }
 
 impl Op {
@@ -400,6 +408,10 @@ impl Op {
             | Self::SharedSub { index, value, .. } => index == &value_id || value == &value_id,
             Self::ParamLoad { index, .. } | Self::SharedLoad { index, .. } => index == &value_id,
             Self::Select { cond, a, b } => cond == &value_id || a == &value_id || b == &value_id,
+            Self::Mma { a, b, acc } => a == &value_id || b == &value_id || acc == &value_id,
+            Self::MmaLoadA { row, col, .. } | Self::MmaLoadB { row, col, .. } => {
+                row == &value_id || col == &value_id
+            }
         }
     }
 
@@ -512,6 +524,15 @@ impl Op {
             | Self::Return
             | Self::Nop
             | Self::StartScope => {}
+            Self::Mma { a, b, acc } => {
+                replace_if_eq(a, old_id, new_id);
+                replace_if_eq(b, old_id, new_id);
+                replace_if_eq(acc, old_id, new_id);
+            }
+            Self::MmaLoadA { row, col, .. } | Self::MmaLoadB { row, col, .. } => {
+                replace_if_eq(row, old_id, new_id);
+                replace_if_eq(col, old_id, new_id);
+            }
         }
     }
 
@@ -589,6 +610,12 @@ impl Op {
             }
             Self::Select { cond, a, b } => {
                 not_mut(*cond, kernel) && not_mut(*a, kernel) && not_mut(*b, kernel)
+            }
+            Self::Mma { a, b, acc } => {
+                not_mut(*a, kernel) && not_mut(*b, kernel) && not_mut(*acc, kernel)
+            }
+            Self::MmaLoadA { row, col, .. } | Self::MmaLoadB { row, col, .. } => {
+                not_mut(*row, kernel) && not_mut(*col, kernel)
             }
             Self::Barrier
             | Self::BlockId { .. }

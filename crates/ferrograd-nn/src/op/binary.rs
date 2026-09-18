@@ -2,8 +2,8 @@ use fused_gpu::{
     dispatch::{
         CompilationOptions,
         backend::{
-            DispatchOptions, Graph, GraphOp, MetaId, Node, NodeId, Op, Param, ParamId, ValueId,
-            ValueState,
+            DType, DispatchOptions, Graph, GraphOp, MetaId, Node, NodeId, Op, Param, ParamId,
+            ValueId, ValueState,
             kernel::{LinkedKernel, NodeInput, SaveIndicator},
         },
     },
@@ -121,7 +121,9 @@ pub fn add<'a>(graph: &mut Graph<'a>, a: NodeId, b: NodeId) -> NodeId {
                         let a = graph.nodes[node_id].inputs[0];
                         let b = graph.nodes[node_id].inputs[1];
 
-                        let a_val = kernel.raw.def_var(dtype, ValueState::Mut, None);
+                        let a_val = kernel
+                            .raw
+                            .def_var(DType::Simple(dtype), ValueState::Mut, None);
 
                         let mut a_deep = eval_node(
                             root,
@@ -144,7 +146,9 @@ pub fn add<'a>(graph: &mut Graph<'a>, a: NodeId, b: NodeId) -> NodeId {
                             options,
                         )?;
 
-                        let b_val = kernel.raw.def_var(dtype, ValueState::Mut, None);
+                        let b_val = kernel
+                            .raw
+                            .def_var(DType::Simple(dtype), ValueState::Mut, None);
 
                         let mut b_deep = eval_node(
                             root,
@@ -279,7 +283,9 @@ pub fn mul<'a>(graph: &mut Graph<'a>, a: NodeId, b: NodeId) -> NodeId {
                         let a = graph.nodes[node_id].inputs[0];
                         let b = graph.nodes[node_id].inputs[1];
 
-                        let a_val = kernel.raw.def_var(dtype, ValueState::Mut, None);
+                        let a_val = kernel
+                            .raw
+                            .def_var(DType::Simple(dtype), ValueState::Mut, None);
 
                         let mut a_deep = eval_node(
                             root,
@@ -302,7 +308,9 @@ pub fn mul<'a>(graph: &mut Graph<'a>, a: NodeId, b: NodeId) -> NodeId {
                             options,
                         )?;
 
-                        let b_val = kernel.raw.def_var(dtype, ValueState::Mut, None);
+                        let b_val = kernel
+                            .raw
+                            .def_var(DType::Simple(dtype), ValueState::Mut, None);
 
                         let mut b_deep = eval_node(
                             root,
@@ -335,7 +343,7 @@ pub fn mul<'a>(graph: &mut Graph<'a>, a: NodeId, b: NodeId) -> NodeId {
 
                     Some(0) => {
                         let g_val = kernel.raw.def_var(
-                            dtype,
+                            DType::Simple(dtype),
                             ValueState::Mut,
                             Some(dtype.constant_float(0.0)?),
                         );
@@ -373,7 +381,7 @@ pub fn mul<'a>(graph: &mut Graph<'a>, a: NodeId, b: NodeId) -> NodeId {
 
                     Some(1) => {
                         let g_val = kernel.raw.def_var(
-                            dtype,
+                            DType::Simple(dtype),
                             ValueState::Mut,
                             Some(dtype.constant_float(0.0)?),
                         );
@@ -488,7 +496,9 @@ pub fn sub<'a>(graph: &mut Graph<'a>, a: NodeId, b: NodeId) -> NodeId {
                         let a = graph.nodes[node_id].inputs[0];
                         let b = graph.nodes[node_id].inputs[1];
 
-                        let a_val = kernel.raw.def_var(dtype, ValueState::Mut, None);
+                        let a_val = kernel
+                            .raw
+                            .def_var(DType::Simple(dtype), ValueState::Mut, None);
 
                         let mut a_deep = eval_node(
                             root,
@@ -511,7 +521,9 @@ pub fn sub<'a>(graph: &mut Graph<'a>, a: NodeId, b: NodeId) -> NodeId {
                             options,
                         )?;
 
-                        let b_val = kernel.raw.def_var(dtype, ValueState::Mut, None);
+                        let b_val = kernel
+                            .raw
+                            .def_var(DType::Simple(dtype), ValueState::Mut, None);
 
                         let mut b_deep = eval_node(
                             root,
@@ -569,7 +581,7 @@ pub fn sub<'a>(graph: &mut Graph<'a>, a: NodeId, b: NodeId) -> NodeId {
 
                     Some(1) => {
                         let g_val = kernel.raw.def_var(
-                            dtype,
+                            DType::Simple(dtype),
                             ValueState::Mut,
                             Some(dtype.constant_float(0.0)?),
                         );
@@ -679,7 +691,9 @@ pub fn div<'a>(graph: &mut Graph<'a>, a: NodeId, b: NodeId) -> NodeId {
                         let a = graph.nodes[node_id].inputs[0];
                         let b = graph.nodes[node_id].inputs[1];
 
-                        let a_val = kernel.raw.def_var(dtype, ValueState::Mut, None);
+                        let a_val = kernel
+                            .raw
+                            .def_var(DType::Simple(dtype), ValueState::Mut, None);
 
                         let mut a_deep = eval_node(
                             root,
@@ -702,7 +716,9 @@ pub fn div<'a>(graph: &mut Graph<'a>, a: NodeId, b: NodeId) -> NodeId {
                             options,
                         )?;
 
-                        let b_val = kernel.raw.def_var(dtype, ValueState::Mut, None);
+                        let b_val = kernel
+                            .raw
+                            .def_var(DType::Simple(dtype), ValueState::Mut, None);
 
                         let mut b_deep = eval_node(
                             root,
@@ -735,7 +751,7 @@ pub fn div<'a>(graph: &mut Graph<'a>, a: NodeId, b: NodeId) -> NodeId {
 
                     Some(0) => {
                         let g_val = kernel.raw.def_var(
-                            dtype,
+                            DType::Simple(dtype),
                             ValueState::Mut,
                             Some(dtype.constant_float(0.0)?),
                         );
@@ -773,7 +789,7 @@ pub fn div<'a>(graph: &mut Graph<'a>, a: NodeId, b: NodeId) -> NodeId {
 
                     Some(1) => {
                         let g_val = kernel.raw.def_var(
-                            dtype,
+                            DType::Simple(dtype),
                             ValueState::Mut,
                             Some(dtype.constant_float(0.0)?),
                         );
@@ -806,19 +822,19 @@ pub fn div<'a>(graph: &mut Graph<'a>, a: NodeId, b: NodeId) -> NodeId {
                         let b_val = read_saved(kernel, idx, saved_params[b], graph, b, params)?;
 
                         let bb = kernel.raw.def_var(
-                            dtype,
+                            DType::Simple(dtype),
                             ValueState::Inline,
                             Some(Op::Mul { a: b_val, b: b_val }),
                         );
 
                         let neg_g_val = kernel.raw.def_var(
-                            dtype,
+                            DType::Simple(dtype),
                             ValueState::Inline,
                             Some(Op::Neg { x: g_val }),
                         );
 
                         let a_div_bb = kernel.raw.def_var(
-                            dtype,
+                            DType::Simple(dtype),
                             ValueState::Inline,
                             Some(Op::Div { a: a_val, b: bb }),
                         );
@@ -886,15 +902,17 @@ fn read_saved(
         kernel.register_param(pid);
 
         Ok(kernel.raw.def_var(
-            params[pid].dtype,
+            DType::Simple(params[pid].dtype),
             ValueState::Immut,
             Some(Op::ParamLoad { param: pid, index }),
         ))
     } else {
         let dtype = graph.nodes[node_id].dtype;
 
-        Ok(kernel
-            .raw
-            .def_var(dtype, ValueState::Inline, Some(dtype.constant_float(0.0)?)))
+        Ok(kernel.raw.def_var(
+            DType::Simple(dtype),
+            ValueState::Inline,
+            Some(dtype.constant_float(0.0)?),
+        ))
     }
 }

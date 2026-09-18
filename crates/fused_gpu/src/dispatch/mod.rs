@@ -361,18 +361,6 @@ pub struct GpuContext<B: GpuBackend = backend::GpuContext> {
 }
 
 impl GpuContext<backend::GpuContext> {
-    /// Blocking creation of the context by searching for GPU.
-    ///
-    /// # Errors
-    ///
-    /// Failure is platform-specific and backend-dependent. It is likely a result of
-    /// not finding a supported device. Errors must be handled properly in critical code.
-    pub fn new() -> Result<Self, Error> {
-        Ok(Self {
-            inner: pollster::block_on(backend::GpuContext::new())?,
-        })
-    }
-
     /// Non-blocking creation of the context by searching for GPU.
     ///
     /// # Errors

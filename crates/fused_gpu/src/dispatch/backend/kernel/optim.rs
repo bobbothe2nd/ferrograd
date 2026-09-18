@@ -1,6 +1,6 @@
 use crate::{
     dispatch::backend::{
-        Axis, DType, Graph, Metadata, Op, Param, ParamTy, ValueState,
+        Axis, DType, Graph, Metadata, Op, Param, ParamTy, SimpleDType, ValueState,
         kernel::{Kernel, RawKernel},
     },
     errors::Error,
@@ -38,7 +38,7 @@ pub fn lower_optim(graph: &Graph, meta: Metadata) -> Result<Kernel, Error> {
     }
 
     kernel.params.push(Param {
-        dtype: DType::U32,
+        dtype: SimpleDType::U32,
         ty: ParamTy::Uniform,
         pid: 0,
     });
@@ -61,7 +61,7 @@ pub fn lower_optim(graph: &Graph, meta: Metadata) -> Result<Kernel, Error> {
 
     for &meta_index in &root_node.shape {
         let dim_val = kernel.raw.def_var(
-            DType::U32,
+            DType::Simple(SimpleDType::U32),
             ValueState::Immut,
             Some(Op::ReadMeta {
                 param: 0,
@@ -75,7 +75,7 @@ pub fn lower_optim(graph: &Graph, meta: Metadata) -> Result<Kernel, Error> {
     }
 
     let gid = kernel.raw.def_var(
-        DType::U32,
+        DType::Simple(SimpleDType::U32),
         ValueState::Mut,
         Some(Op::GlobalId { axis: Axis::X }),
     );
@@ -84,7 +84,9 @@ pub fn lower_optim(graph: &Graph, meta: Metadata) -> Result<Kernel, Error> {
     kernel.raw.update_var_state(total, ValueState::Mut);
 
     if dims.len() > 1 {
-        let gid2 = kernel.raw.def_var(DType::U32, ValueState::Mut, None);
+        let gid2 = kernel
+            .raw
+            .def_var(DType::Simple(SimpleDType::U32), ValueState::Mut, None);
 
         for (i, &d) in dims.iter().enumerate().skip(1) {
             kernel.raw.overwrite_var(
@@ -103,29 +105,38 @@ pub fn lower_optim(graph: &Graph, meta: Metadata) -> Result<Kernel, Error> {
     }
 
     let row = kernel.raw.def_var(
-        DType::U32,
+        DType::Simple(SimpleDType::U32),
         ValueState::Immut,
         Some(Op::GlobalId { axis: Axis::Y }),
     );
     let col = kernel.raw.def_var(
-        DType::U32,
+        DType::Simple(SimpleDType::U32),
         ValueState::Immut,
         Some(Op::GlobalId { axis: Axis::X }),
     );
 
     let lr = kernel.raw.def_var(
-        DType::F32,
+        DType::Simple(SimpleDType::F32),
         ValueState::Immut,
         Some(Op::ReadMeta { param: 0, field: 0 }),
     );
 
     let lr_normalized = match dtype {
-        DType::F16 => kernel
-            .raw
-            .def_var(dtype, ValueState::Immut, Some(Op::CastF16 { id: lr })),
-        DType::BF16 => kernel
-            .raw
-            .def_var(dtype, ValueState::Immut, Some(Op::CastBF16 { id: lr })),
+        SimpleDType::F16 => kernel.raw.def_var(
+            DType::Simple(dtype),
+            ValueState::Immut,
+            Some(Op::CastF16 { id: lr }),
+        ),
+        SimpleDType::BF16 => kernel.raw.def_var(
+            DType::Simple(dtype),
+            ValueState::Immut,
+            Some(Op::CastBF16 { id: lr }),
+        ),
+        SimpleDType::F64 => kernel.raw.def_var(
+            DType::Simple(dtype),
+            ValueState::Immut,
+            Some(Op::CastF64 { id: lr }),
+        ),
         _ => lr,
     };
 

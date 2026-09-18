@@ -90,7 +90,6 @@ fn main() {
             ]
         });
 
-
     let tensor_elapsed = tensor_start.elapsed();
 
     println!("TENSOR INIT TIME: {tensor_elapsed:?} elapsed\n");
@@ -114,9 +113,7 @@ fn main() {
         println!("EPOCH {epoch}:");
 
         let target = {
-            let target = f16::from_f32(
-                2.0 * (rng.next_u32() as f32 / u32::MAX as f32) - 1.0
-            );
+            let target = f16::from_f32(2.0 * (rng.next_u32() as f32 / u32::MAX as f32) - 1.0);
 
             let arr = [target; (H * H) as usize];
 

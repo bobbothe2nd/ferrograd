@@ -295,6 +295,8 @@ mod tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
+    use pollster::block_on;
+
     use super::*;
     use crate::{
         dispatch::{GpuBackend, GpuContext},
@@ -408,7 +410,7 @@ mod tests {
 
     #[test]
     fn roundtrip_v0_f64() {
-        let ctx = GpuContext::new().unwrap();
+        let ctx = block_on(GpuContext::new_nonblocking()).unwrap();
 
         let shape1 = [2, 3];
         let data1 = [0.0, 1.0, -2.5, 3.25, 100.0, -999.125];
@@ -436,7 +438,7 @@ mod tests {
 
     #[test]
     fn roundtrip_v2_f32() {
-        let ctx = GpuContext::new().unwrap();
+        let ctx = block_on(GpuContext::new_nonblocking()).unwrap();
 
         let shape1 = [2, 3];
         let data1 = [0.0, 1.0, -2.5, 3.25, 100.0, -999.125];
@@ -464,7 +466,7 @@ mod tests {
 
     #[test]
     fn roundtrip_v2_f16() {
-        let ctx = GpuContext::new().unwrap();
+        let ctx = block_on(GpuContext::new_nonblocking()).unwrap();
 
         let shape1 = [2, 3];
         let data1 = [
@@ -499,7 +501,7 @@ mod tests {
 
     #[test]
     fn roundtrip_v2_bf16() {
-        let ctx = GpuContext::new().unwrap();
+        let ctx = block_on(GpuContext::new_nonblocking()).unwrap();
 
         let shape1 = [2, 3];
         let data1 = [

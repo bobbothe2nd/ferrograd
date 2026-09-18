@@ -1,4 +1,4 @@
-use fused_gpu::dispatch::backend::{DType, LossType, Op, ValueState};
+use fused_gpu::dispatch::backend::{DType, LossType, Op, SimpleDType, ValueState};
 
 pub const MEAN_SQUARED_ERROR: LossType = LossType {
     lower: |kernel, dtype, pred, target, _, _, _, _| {
@@ -90,8 +90,10 @@ pub const BINARY_CROSS_ENTROPY: LossType = LossType {
 
 pub const CROSS_ENTROPY: LossType = LossType {
     lower: |kernel, dtype, pred, target, _, target_param, row, col| {
-        kernel.update_param_dtype(target_param, DType::U32);
-        kernel.raw.update_var_dtype(target, DType::U32);
+        kernel.update_param_dtype(target_param, SimpleDType::U32);
+        kernel
+            .raw
+            .update_var_dtype(target, DType::Simple(SimpleDType::U32));
         kernel.raw.update_var_init(
             target,
             Op::ParamLoad {
@@ -101,7 +103,7 @@ pub const CROSS_ENTROPY: LossType = LossType {
         );
 
         let target_eq_col = kernel.raw.def_var(
-            DType::Bool,
+            DType::Simple(SimpleDType::Bool),
             ValueState::Inline,
             Some(Op::Eq { a: target, b: col }),
         );

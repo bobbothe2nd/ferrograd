@@ -3,7 +3,7 @@ use crate::{
         CompilationOptions, GpuBackend,
         backend::{
             DType, Graph, GraphOp, MetaId, Metadata, NodeId, Op, Param, ParamId, SharedAlloc,
-            SharedId, Value, ValueId, ValueState,
+            SharedId, SimpleDType, Value, ValueId, ValueState,
         },
     },
     errors::{Error, ErrorKind, GraphErrorContext},
@@ -280,7 +280,7 @@ pub struct Kernel {
 }
 
 impl Kernel {
-    pub fn update_param_dtype(&mut self, id: ValueId, dtype: DType) {
+    pub fn update_param_dtype(&mut self, id: ValueId, dtype: SimpleDType) {
         self.params[id].dtype = dtype;
     }
 
@@ -347,12 +347,16 @@ impl LinkedKernel<'_> {
         content: F,
     ) -> Result<R, Error> {
         self.raw.ops.push(Op::ForeverLoopBegin);
-        let cond = self
-            .raw
-            .def_var(DType::Bool, ValueState::Inline, Some(cond));
-        let not_cond = self
-            .raw
-            .def_var(DType::Bool, ValueState::Inline, Some(Op::Not { cond }));
+        let cond = self.raw.def_var(
+            DType::Simple(SimpleDType::Bool),
+            ValueState::Inline,
+            Some(cond),
+        );
+        let not_cond = self.raw.def_var(
+            DType::Simple(SimpleDType::Bool),
+            ValueState::Inline,
+            Some(Op::Not { cond }),
+        );
         self.push_if(not_cond, |kernel| {
             kernel.raw.push_break();
             Ok(())
@@ -524,8 +528,16 @@ impl RawKernel {
         content: F,
     ) -> Result<R, Error> {
         self.ops.push(Op::ForeverLoopBegin);
-        let cond = self.def_var(DType::Bool, ValueState::Inline, Some(cond));
-        let not_cond = self.def_var(DType::Bool, ValueState::Inline, Some(Op::Not { cond }));
+        let cond = self.def_var(
+            DType::Simple(SimpleDType::Bool),
+            ValueState::Inline,
+            Some(cond),
+        );
+        let not_cond = self.def_var(
+            DType::Simple(SimpleDType::Bool),
+            ValueState::Inline,
+            Some(Op::Not { cond }),
+        );
         self.push_if(not_cond, |kernel| {
             kernel.push_break();
             Ok(())
@@ -664,7 +676,7 @@ impl RawKernel {
         self.values[id].init = Some(init);
     }
 
-    pub fn new_shared(&mut self, dtype: DType, size: u32) -> SharedId {
+    pub fn new_shared(&mut self, dtype: SimpleDType, size: u32) -> SharedId {
         let id = self.shared.len();
         self.shared.push(SharedAlloc { dtype, size });
         id

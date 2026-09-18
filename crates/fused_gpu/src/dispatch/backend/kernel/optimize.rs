@@ -1,7 +1,7 @@
 use crate::{
     dispatch::{
         CompilationOptions, OptFlags,
-        backend::{DType, Op, ValueId, ValueState, kernel::RawKernel},
+        backend::{Op, ValueId, ValueState, kernel::RawKernel},
     },
     errors::Error,
 };
@@ -31,10 +31,7 @@ pub fn optimize(kernel: &mut RawKernel, options: &CompilationOptions) -> Result<
         if options.opt.flags.contains(OptFlags::MUL_ADD) {
             for value_id in 0..kernel.values.len() {
                 if kernel.values[value_id].state == ValueState::Masked
-                    || !matches!(
-                        kernel.values[value_id].dtype,
-                        DType::F32 | DType::F16 | DType::BF16
-                    )
+                    || !kernel.values[value_id].dtype.is_float()
                 {
                     continue;
                 }
@@ -58,10 +55,7 @@ pub fn optimize(kernel: &mut RawKernel, options: &CompilationOptions) -> Result<
 
             let additions = iter_values(kernel, |op, value_id| {
                 if kernel.values[value_id].state == ValueState::Masked
-                    || !matches!(
-                        kernel.values[value_id].dtype,
-                        DType::F32 | DType::F16 | DType::BF16
-                    )
+                    || !kernel.values[value_id].dtype.is_float()
                 {
                     return None;
                 }
@@ -95,10 +89,7 @@ pub fn optimize(kernel: &mut RawKernel, options: &CompilationOptions) -> Result<
         if options.opt.flags.contains(OptFlags::DIV_CONST) {
             let divisions = iter_values(kernel, |op, value_id| {
                 if kernel.values[value_id].state == ValueState::Masked
-                    || !matches!(
-                        kernel.values[value_id].dtype,
-                        DType::F32 | DType::F16 | DType::BF16
-                    )
+                    || !kernel.values[value_id].dtype.is_float()
                 {
                     return None;
                 }

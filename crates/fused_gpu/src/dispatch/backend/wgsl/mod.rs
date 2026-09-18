@@ -3,7 +3,7 @@ use crate::{
         CompilationOptions, DebugCompilationOptions, GpuBackend, GpuBufferBackend,
         GpuKernelBackend, PollStatus, TargetCompilationOptions, TargetFlags,
         backend::{
-            Axis, DType, MetaId, NodeId, Op, Param, ParamTy, ValueId, ValueState,
+            Axis, DType, MetaId, NodeId, Op, Param, ParamTy, SimpleDType, ValueId, ValueState,
             kernel::{Dependencies, RawKernel, Redirect},
         },
     },
@@ -591,18 +591,31 @@ const fn get_axis(axis: Axis) -> &'static str {
 
 #[inline]
 const fn get_dtype(dtype: DType) -> Result<&'static str, Error> {
+    let DType::Simple(dtype) = dtype else {
+        return Err(Error {
+            msg: "MMA not supported",
+            kind: ErrorKind::UnsupportedFeature,
+            ctx: (),
+        });
+    };
+
+    get_simple_dtype(dtype)
+}
+
+#[inline]
+const fn get_simple_dtype(dtype: SimpleDType) -> Result<&'static str, Error> {
     match dtype {
-        DType::F64 => Ok("f64"),
-        DType::F32 => Ok("f32"),
-        DType::F16 => Ok("f16"),
-        DType::BF16 => Err(Error {
+        SimpleDType::F64 => Ok("f64"),
+        SimpleDType::F32 => Ok("f32"),
+        SimpleDType::F16 => Ok("f16"),
+        SimpleDType::BF16 => Err(Error {
             msg: "bf16 not supported",
-            kind: ErrorKind::InvalidDType,
+            kind: ErrorKind::UnsupportedFeature,
             ctx: (),
         }),
-        DType::Bool => Ok("bool"),
-        DType::I32 => Ok("i32"),
-        DType::U32 => Ok("u32"),
+        SimpleDType::Bool => Ok("bool"),
+        SimpleDType::I32 => Ok("i32"),
+        SimpleDType::U32 => Ok("u32"),
     }
 }
 
@@ -652,7 +665,7 @@ fn emit_bindings(
 
         let pid = p.pid;
 
-        if p.ty == ParamTy::Uniform && p.dtype == DType::U32 {
+        if p.ty == ParamTy::Uniform && p.dtype == SimpleDType::U32 {
             let _ = write!(
                 out,
                 "@group(0) @binding({pid}) {var_type} param{pid}: Meta;"
@@ -661,7 +674,7 @@ fn emit_bindings(
             let _ = write!(
                 out,
                 "@group(0) @binding({pid}) {var_type} param{pid}: array<{}>;",
-                get_dtype(p.dtype)?,
+                get_simple_dtype(p.dtype)?,
             );
         }
     }
@@ -673,7 +686,7 @@ fn emit_bindings(
         let _ = write!(
             out,
             "var<workgroup> shared{i}: array<{}, ({})>;",
-            get_dtype(s.dtype)?,
+            get_simple_dtype(s.dtype)?,
             s.size
         );
     }
@@ -1285,6 +1298,14 @@ fn process_op(
 
         Op::Break => {
             let _ = write!(out, "break;");
+        }
+
+        _ => {
+            return Err(Error {
+                msg: "MMA not supported",
+                kind: ErrorKind::UnsupportedFeature,
+                ctx: (),
+            });
         }
     }
 

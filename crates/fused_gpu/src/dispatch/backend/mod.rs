@@ -203,6 +203,83 @@ pub type ValueId = usize;
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DType {
+    Simple(SimpleDType),
+    MmaA { dtype: SimpleDType, m: u32, n: u32 },
+    MmaB { dtype: SimpleDType, m: u32, n: u32 },
+    MmaAccum { dtype: SimpleDType, m: u32, n: u32 },
+}
+
+impl DType {
+    #[inline]
+    #[must_use]
+    pub const fn bits(self) -> usize {
+        match self {
+            Self::Simple(dtype) => dtype.bits(),
+            Self::MmaA { dtype, m, n }
+            | Self::MmaB { dtype, m, n }
+            | Self::MmaAccum { dtype, m, n } => dtype.bits() * (m * n) as usize,
+        }
+    }
+
+    #[inline]
+    #[must_use]
+    pub const fn size(self) -> usize {
+        match self {
+            Self::Simple(dtype) => dtype.size(),
+            Self::MmaA { dtype, m, n }
+            | Self::MmaB { dtype, m, n }
+            | Self::MmaAccum { dtype, m, n } => dtype.size() * (m * n) as usize,
+        }
+    }
+
+    #[inline]
+    pub fn is_float(self) -> bool {
+        match self {
+            Self::Simple(dtype) => dtype.is_float(),
+            _ => false,
+        }
+    }
+
+    #[inline]
+    pub fn constant_float(self, value: f32) -> Result<Op, Error> {
+        match self {
+            Self::Simple(dtype) => dtype.constant_float(value),
+            _ => Err(Error {
+                msg: "cannot represent MMA fragment dtype as float constant",
+                kind: ErrorKind::InternalError,
+                ctx: (),
+            }),
+        }
+    }
+
+    #[inline]
+    pub const fn constant_min(self) -> Result<Op, Error> {
+        match self {
+            Self::Simple(dtype) => dtype.constant_min(),
+            _ => Err(Error {
+                msg: "cannot represent MMA fragment dtype as min constant",
+                kind: ErrorKind::InternalError,
+                ctx: (),
+            }),
+        }
+    }
+
+    #[inline]
+    pub const fn constant_max(self) -> Result<Op, Error> {
+        match self {
+            Self::Simple(dtype) => dtype.constant_max(),
+            _ => Err(Error {
+                msg: "cannot represent MMA fragment dtype as max constant",
+                kind: ErrorKind::InternalError,
+                ctx: (),
+            }),
+        }
+    }
+}
+
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SimpleDType {
     F64,
     F32,
     F16,
@@ -212,7 +289,7 @@ pub enum DType {
     Bool,
 }
 
-impl DType {
+impl SimpleDType {
     #[inline]
     #[must_use]
     pub const fn bits(self) -> usize {
@@ -233,6 +310,11 @@ impl DType {
             Self::F32 | Self::I32 | Self::U32 => 4,
             Self::F64 => 8,
         }
+    }
+
+    #[inline]
+    pub fn is_float(self) -> bool {
+        matches!(self, Self::BF16 | Self::F16 | Self::F32 | Self::F64)
     }
 
     #[inline]
@@ -299,7 +381,7 @@ impl DType {
 /// Parameter type used in kernel IR.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Param {
-    pub dtype: DType,
+    pub dtype: SimpleDType,
     pub ty: ParamTy,
     pub pid: ParamId,
 }
@@ -313,7 +395,7 @@ pub enum ParamTy {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SharedAlloc {
-    pub dtype: DType,
+    pub dtype: SimpleDType,
     pub size: u32,
 }
 
@@ -372,7 +454,7 @@ pub struct Node<'a> {
     pub inputs: Vec<NodeId>,
     pub outputs: Vec<NodeId>,
     pub shape: Vec<MetaId>,
-    pub dtype: DType,
+    pub dtype: SimpleDType,
 }
 
 #[derive(Debug, Clone, Copy, Hash)]
@@ -411,6 +493,7 @@ pub struct OptimType {
     /// ```ignore
     /// fn(
     ///     kernel: &mut Kernel,
+    ///     dtype: SimpleDType,
     ///     lr: ValueId,
     ///     weights: ParamId,
     ///     grads: ParamId,
@@ -421,7 +504,7 @@ pub struct OptimType {
     /// ```
     pub lower: fn(
         &mut Kernel,
-        DType,
+        SimpleDType,
         ValueId,
         ParamId,
         ParamId,
@@ -1107,7 +1190,7 @@ impl<'a> Graph<'a> {
         op: GraphOp<'a>,
         inputs: Vec<NodeId>,
         shape: Vec<MetaId>,
-        dtype: DType,
+        dtype: SimpleDType,
     ) -> NodeId {
         let id = self.nodes.len();
 
@@ -1127,28 +1210,53 @@ impl<'a> Graph<'a> {
         id
     }
 
-    pub fn input(&mut self, shape: &[MetaId], dtype: DType) -> NodeId {
+    pub fn input(&mut self, shape: &[MetaId], dtype: SimpleDType) -> NodeId {
         self.add_node(GraphOp::Input, Vec::new(), shape.to_vec(), dtype)
     }
 
     pub fn constant_f32(&mut self, data: f32) -> NodeId {
-        self.add_node(GraphOp::ConstF32(data), Vec::new(), Vec::new(), DType::F32)
+        self.add_node(
+            GraphOp::ConstF32(data),
+            Vec::new(),
+            Vec::new(),
+            SimpleDType::F32,
+        )
     }
 
     pub fn constant_u32(&mut self, data: u32) -> NodeId {
-        self.add_node(GraphOp::ConstU32(data), Vec::new(), Vec::new(), DType::F32)
+        self.add_node(
+            GraphOp::ConstU32(data),
+            Vec::new(),
+            Vec::new(),
+            SimpleDType::F32,
+        )
     }
 
     pub fn constant_i32(&mut self, data: i32) -> NodeId {
-        self.add_node(GraphOp::ConstI32(data), Vec::new(), Vec::new(), DType::F32)
+        self.add_node(
+            GraphOp::ConstI32(data),
+            Vec::new(),
+            Vec::new(),
+            SimpleDType::F32,
+        )
     }
 
     pub fn constant_f16(&mut self, data: half::f16) -> NodeId {
-        self.add_node(GraphOp::ConstF16(data), Vec::new(), Vec::new(), DType::F32)
+        self.add_node(
+            GraphOp::ConstF16(data),
+            Vec::new(),
+            Vec::new(),
+            SimpleDType::F32,
+        )
     }
 
     pub fn constant_bf16(&mut self, data: half::bf16) -> NodeId {
-        self.add_node(GraphOp::ConstBf16(data), Vec::new(), Vec::new(), DType::F32)
+        self.add_node(
+            GraphOp::ConstBf16(data),
+            Vec::new(),
+            Vec::new(),
+            SimpleDType::F32,
+        )
     }
 
     pub fn repeat<I>(&mut self, count: usize, mut start: I, structure: fn(&mut Self, I) -> I) {

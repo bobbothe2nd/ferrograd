@@ -3,7 +3,7 @@ use crate::{
         CompilationOptions,
         backend::{
             Axis, DType, DispatchOptions, Graph, GraphOp, Metadata, Node, NodeId, Op, Param,
-            ParamId, ParamTy, ValueId, ValueState,
+            ParamId, ParamTy, SimpleDType, ValueId, ValueState,
             kernel::{
                 Dependencies, KernelsChained, LinkedKernel, NodeInput, RawKernel, SaveIndicator,
             },
@@ -28,7 +28,7 @@ pub fn lower_backward<'a>(
     let mut params = Vec::new();
 
     params.push(Param {
-        dtype: DType::U32,
+        dtype: SimpleDType::U32,
         ty: ParamTy::Uniform,
         pid: 0,
     });
@@ -122,23 +122,23 @@ pub fn lower_backward<'a>(
                     gen_kernel(meta, &params, [tile_size, tile_size, 1], root, root_node);
 
                 let upstream = kernel.raw.def_var(
-                    root_node.dtype,
+                    DType::Simple(root_node.dtype),
                     ValueState::Mut,
                     Some(root_node.dtype.constant_float(0.0)?),
                 );
 
                 let tile_size = kernel.raw.def_var(
-                    DType::U32,
+                    DType::Simple(SimpleDType::U32),
                     ValueState::Const,
                     Some(Op::ConstU32 { value: tile_size }),
                 );
                 let local_row = kernel.raw.def_var(
-                    DType::U32,
+                    DType::Simple(SimpleDType::U32),
                     ValueState::Immut,
                     Some(Op::LocalId { axis: Axis::Y }),
                 );
                 let local_col = kernel.raw.def_var(
-                    DType::U32,
+                    DType::Simple(SimpleDType::U32),
                     ValueState::Immut,
                     Some(Op::LocalId { axis: Axis::X }),
                 );
@@ -397,7 +397,7 @@ fn gen_kernel<'a>(
 
     for &meta_index in &root_node.shape {
         let dim_val = kernel.raw.def_var(
-            DType::U32,
+            DType::Simple(SimpleDType::U32),
             ValueState::Immut,
             Some(Op::ReadMeta {
                 param: 0,
@@ -418,20 +418,24 @@ fn gen_kernel<'a>(
     }
 
     let gid = kernel.raw.def_var(
-        DType::U32,
+        DType::Simple(SimpleDType::U32),
         ValueState::Mut,
         Some(Op::GlobalId { axis: Axis::X }),
     );
 
-    let mut base = kernel
-        .raw
-        .def_var(DType::U32, ValueState::Mut, Some(Op::ConstU32 { value: 0 }));
+    let mut base = kernel.raw.def_var(
+        DType::Simple(SimpleDType::U32),
+        ValueState::Mut,
+        Some(Op::ConstU32 { value: 0 }),
+    );
 
     let total = dims[0];
     kernel.raw.update_var_state(total, ValueState::Mut);
 
     if dims.len() > 1 {
-        let gid2 = kernel.raw.def_var(DType::U32, ValueState::Mut, None);
+        let gid2 = kernel
+            .raw
+            .def_var(DType::Simple(SimpleDType::U32), ValueState::Mut, None);
 
         for (i, &d) in dims.iter().enumerate().skip(1) {
             kernel.raw.overwrite_var(

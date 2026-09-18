@@ -3,7 +3,7 @@ use fused_gpu::{
         CompilationOptions,
         backend::{
             Axis, DType, DispatchOptions, Graph, GraphOp, Node, NodeId, Op, Param, ParamId,
-            ValueId, ValueState,
+            SimpleDType, ValueId, ValueState,
             kernel::{LinkedKernel, NodeInput, SaveIndicator},
         },
     },
@@ -63,7 +63,7 @@ pub fn lower_softmax_recursive<'a>(
 
     let cols_field = node.shape[node.shape.len() - 1];
     let cols = kernel.raw.def_var(
-        DType::U32,
+        DType::Simple(SimpleDType::U32),
         ValueState::Immut,
         Some(Op::ReadMeta {
             param: 0,
@@ -74,52 +74,58 @@ pub fn lower_softmax_recursive<'a>(
     kernel.register_meta(cols_field);
 
     let shared_size_const = kernel.raw.def_var(
-        DType::U32,
+        DType::Simple(SimpleDType::U32),
         ValueState::Inline,
         Some(Op::ConstU32 { value: shared_size }),
     );
     let zero = kernel.raw.def_var(
-        DType::U32,
+        DType::Simple(SimpleDType::U32),
         ValueState::Inline,
         Some(Op::ConstU32 { value: 0 }),
     );
     let one = kernel.raw.def_var(
-        DType::U32,
+        DType::Simple(SimpleDType::U32),
         ValueState::Inline,
         Some(Op::ConstU32 { value: 1 }),
     );
-    let one_f = kernel
-        .raw
-        .def_var(dtype, ValueState::Inline, Some(dtype.constant_float(1.0)?));
+    let one_f = kernel.raw.def_var(
+        DType::Simple(dtype),
+        ValueState::Inline,
+        Some(dtype.constant_float(1.0)?),
+    );
 
     let row = kernel.raw.def_var(
-        DType::U32,
+        DType::Simple(SimpleDType::U32),
         ValueState::Immut,
         Some(Op::BlockId { axis: Axis::X }),
     );
 
     let tmp_shared = kernel.raw.new_shared(dtype, shared_size);
 
-    let col = kernel
-        .raw
-        .def_var(DType::U32, ValueState::Mut, Some(Op::CopyVar { id: tid }));
+    let col = kernel.raw.def_var(
+        DType::Simple(SimpleDType::U32),
+        ValueState::Mut,
+        Some(Op::CopyVar { id: tid }),
+    );
 
     match backwardness {
         None => {
-            let local_max = kernel
-                .raw
-                .def_var(dtype, ValueState::Mut, Some(dtype.constant_min()?));
+            let local_max = kernel.raw.def_var(
+                DType::Simple(dtype),
+                ValueState::Mut,
+                Some(dtype.constant_min()?),
+            );
 
             let mut x_deep = Ok(Vec::new());
 
             kernel.push_while_loop(Op::Lt { a: col, b: cols }, |kernel| {
                 let row_flat = kernel.raw.def_var(
-                    DType::U32,
+                    DType::Simple(SimpleDType::U32),
                     ValueState::Inline,
                     Some(Op::Mul { a: row, b: cols }),
                 );
                 let idx = kernel.raw.def_var(
-                    DType::U32,
+                    DType::Simple(SimpleDType::U32),
                     ValueState::Immut,
                     Some(Op::Add {
                         a: row_flat,
@@ -127,7 +133,9 @@ pub fn lower_softmax_recursive<'a>(
                     }),
                 );
 
-                let x_val = kernel.raw.def_var(dtype, ValueState::Mut, None);
+                let x_val = kernel
+                    .raw
+                    .def_var(DType::Simple(dtype), ValueState::Mut, None);
 
                 x_deep = eval_node(
                     root,
@@ -170,7 +178,7 @@ pub fn lower_softmax_recursive<'a>(
             kernel.raw.push_barrier();
 
             let stride_const = kernel.raw.def_var(
-                DType::U32,
+                DType::Simple(SimpleDType::U32),
                 ValueState::Const,
                 Some(Op::Shr {
                     a: shared_size_const,
@@ -178,21 +186,21 @@ pub fn lower_softmax_recursive<'a>(
                 }),
             );
             let stride = kernel.raw.def_var(
-                DType::U32,
+                DType::Simple(SimpleDType::U32),
                 ValueState::Mut,
                 Some(Op::CopyVar { id: stride_const }),
             );
 
             kernel.push_forever_loop(|kernel| {
                 let tid_less_stride = kernel.raw.def_var(
-                    DType::Bool,
+                    DType::Simple(SimpleDType::Bool),
                     ValueState::Inline,
                     Some(Op::Lt { a: tid, b: stride }),
                 );
 
                 kernel.push_if(tid_less_stride, |kernel| {
                     let scratch_tid = kernel.raw.def_var(
-                        dtype,
+                        DType::Simple(dtype),
                         ValueState::Inline,
                         Some(Op::SharedLoad {
                             mem: tmp_shared,
@@ -201,12 +209,12 @@ pub fn lower_softmax_recursive<'a>(
                     );
 
                     let tid_stride = kernel.raw.def_var(
-                        DType::U32,
+                        DType::Simple(SimpleDType::U32),
                         ValueState::Inline,
                         Some(Op::Add { a: stride, b: tid }),
                     );
                     let scratch_tid_stride = kernel.raw.def_var(
-                        dtype,
+                        DType::Simple(dtype),
                         ValueState::Inline,
                         Some(Op::SharedLoad {
                             mem: tmp_shared,
@@ -215,7 +223,7 @@ pub fn lower_softmax_recursive<'a>(
                     );
 
                     let max_scratch_stride = kernel.raw.def_var(
-                        dtype,
+                        DType::Simple(dtype),
                         ValueState::Inline,
                         Some(Op::Max {
                             a: scratch_tid,
@@ -231,7 +239,7 @@ pub fn lower_softmax_recursive<'a>(
                 kernel.raw.push_barrier();
 
                 let stride_is_one = kernel.raw.def_var(
-                    DType::Bool,
+                    DType::Simple(SimpleDType::Bool),
                     ValueState::Inline,
                     Some(Op::Eq { a: stride, b: one }),
                 );
@@ -249,7 +257,7 @@ pub fn lower_softmax_recursive<'a>(
             })?;
 
             let row_max = kernel.raw.def_var(
-                dtype,
+                DType::Simple(dtype),
                 ValueState::Immut,
                 Some(Op::SharedLoad {
                     mem: tmp_shared,
@@ -259,21 +267,22 @@ pub fn lower_softmax_recursive<'a>(
 
             kernel.raw.push_barrier();
 
-            let local_sum =
-                kernel
-                    .raw
-                    .def_var(dtype, ValueState::Mut, Some(dtype.constant_float(0.0)?));
+            let local_sum = kernel.raw.def_var(
+                DType::Simple(dtype),
+                ValueState::Mut,
+                Some(dtype.constant_float(0.0)?),
+            );
 
             kernel.raw.overwrite_var(col, Op::CopyVar { id: tid });
 
             kernel.push_while_loop(Op::Lt { a: col, b: cols }, |kernel| {
                 let row_flat = kernel.raw.def_var(
-                    DType::U32,
+                    DType::Simple(SimpleDType::U32),
                     ValueState::Inline,
                     Some(Op::Mul { a: row, b: cols }),
                 );
                 let idx = kernel.raw.def_var(
-                    DType::U32,
+                    DType::Simple(SimpleDType::U32),
                     ValueState::Immut,
                     Some(Op::Add {
                         a: row_flat,
@@ -281,7 +290,9 @@ pub fn lower_softmax_recursive<'a>(
                     }),
                 );
 
-                let x_val = kernel.raw.def_var(dtype, ValueState::Mut, None);
+                let x_val = kernel
+                    .raw
+                    .def_var(DType::Simple(dtype), ValueState::Mut, None);
 
                 eval_node(
                     root,
@@ -305,7 +316,7 @@ pub fn lower_softmax_recursive<'a>(
                 )?;
 
                 let x_minus_max = kernel.raw.def_var(
-                    dtype,
+                    DType::Simple(dtype),
                     ValueState::Inline,
                     Some(Op::Sub {
                         a: x_val,
@@ -313,10 +324,11 @@ pub fn lower_softmax_recursive<'a>(
                     }),
                 );
 
-                let e =
-                    kernel
-                        .raw
-                        .def_var(dtype, ValueState::Immut, Some(Op::Exp { x: x_minus_max }));
+                let e = kernel.raw.def_var(
+                    DType::Simple(dtype),
+                    ValueState::Immut,
+                    Some(Op::Exp { x: x_minus_max }),
+                );
 
                 kernel.param_store(saved_param, idx, e);
 
@@ -339,19 +351,19 @@ pub fn lower_softmax_recursive<'a>(
 
             kernel.push_forever_loop(|kernel| {
                 let tid_less_stride = kernel.raw.def_var(
-                    DType::Bool,
+                    DType::Simple(SimpleDType::Bool),
                     ValueState::Inline,
                     Some(Op::Lt { a: tid, b: stride }),
                 );
 
                 kernel.push_if(tid_less_stride, |kernel| {
                     let tid_stride = kernel.raw.def_var(
-                        DType::U32,
+                        DType::Simple(SimpleDType::U32),
                         ValueState::Inline,
                         Some(Op::Add { a: stride, b: tid }),
                     );
                     let scratch_tid_stride = kernel.raw.def_var(
-                        dtype,
+                        DType::Simple(dtype),
                         ValueState::Inline,
                         Some(Op::SharedLoad {
                             mem: tmp_shared,
@@ -367,7 +379,7 @@ pub fn lower_softmax_recursive<'a>(
                 kernel.raw.push_barrier();
 
                 let stride_is_one = kernel.raw.def_var(
-                    DType::Bool,
+                    DType::Simple(SimpleDType::Bool),
                     ValueState::Inline,
                     Some(Op::Eq { a: stride, b: one }),
                 );
@@ -385,7 +397,7 @@ pub fn lower_softmax_recursive<'a>(
             })?;
 
             let row_sum = kernel.raw.def_var(
-                dtype,
+                DType::Simple(dtype),
                 ValueState::Inline,
                 Some(Op::SharedLoad {
                     mem: tmp_shared,
@@ -394,7 +406,7 @@ pub fn lower_softmax_recursive<'a>(
             );
 
             let inv_row_sum = kernel.raw.def_var(
-                dtype,
+                DType::Simple(dtype),
                 ValueState::Immut,
                 Some(Op::Div {
                     a: one_f,
@@ -408,12 +420,12 @@ pub fn lower_softmax_recursive<'a>(
 
             kernel.push_while_loop(Op::Lt { a: col, b: cols }, |kernel| {
                 let row_flat = kernel.raw.def_var(
-                    DType::U32,
+                    DType::Simple(SimpleDType::U32),
                     ValueState::Inline,
                     Some(Op::Mul { a: row, b: cols }),
                 );
                 let idx = kernel.raw.def_var(
-                    DType::U32,
+                    DType::Simple(SimpleDType::U32),
                     ValueState::Immut,
                     Some(Op::Add {
                         a: row_flat,
@@ -434,21 +446,22 @@ pub fn lower_softmax_recursive<'a>(
         }
 
         Some(0) => {
-            let local_dot =
-                kernel
-                    .raw
-                    .def_var(dtype, ValueState::Mut, Some(dtype.constant_float(0.0)?));
+            let local_dot = kernel.raw.def_var(
+                DType::Simple(dtype),
+                ValueState::Mut,
+                Some(dtype.constant_float(0.0)?),
+            );
 
             let mut dy_deep = Ok(Vec::new());
 
             kernel.push_while_loop(Op::Lt { a: col, b: cols }, |kernel| {
                 let row_flat = kernel.raw.def_var(
-                    DType::U32,
+                    DType::Simple(SimpleDType::U32),
                     ValueState::Inline,
                     Some(Op::Mul { a: row, b: cols }),
                 );
                 let idx = kernel.raw.def_var(
-                    DType::U32,
+                    DType::Simple(SimpleDType::U32),
                     ValueState::Immut,
                     Some(Op::Add {
                         a: row_flat,
@@ -456,10 +469,11 @@ pub fn lower_softmax_recursive<'a>(
                     }),
                 );
 
-                let dy_idx =
-                    kernel
-                        .raw
-                        .def_var(dtype, ValueState::Mut, Some(dtype.constant_float(0.0)?));
+                let dy_idx = kernel.raw.def_var(
+                    DType::Simple(dtype),
+                    ValueState::Mut,
+                    Some(dtype.constant_float(0.0)?),
+                );
 
                 dy_deep = eval_node(
                     root,
@@ -483,7 +497,7 @@ pub fn lower_softmax_recursive<'a>(
                 );
 
                 let y_idx = kernel.raw.def_var(
-                    dtype,
+                    DType::Simple(dtype),
                     ValueState::Inline,
                     Some(Op::ParamLoad {
                         param: saved_param,
@@ -513,7 +527,7 @@ pub fn lower_softmax_recursive<'a>(
             kernel.raw.push_barrier();
 
             let stride_const = kernel.raw.def_var(
-                DType::U32,
+                DType::Simple(SimpleDType::U32),
                 ValueState::Const,
                 Some(Op::Shr {
                     a: shared_size_const,
@@ -521,26 +535,26 @@ pub fn lower_softmax_recursive<'a>(
                 }),
             );
             let stride = kernel.raw.def_var(
-                DType::U32,
+                DType::Simple(SimpleDType::U32),
                 ValueState::Mut,
                 Some(Op::CopyVar { id: stride_const }),
             );
 
             kernel.push_forever_loop(|kernel| {
                 let tid_less_stride = kernel.raw.def_var(
-                    DType::Bool,
+                    DType::Simple(SimpleDType::Bool),
                     ValueState::Inline,
                     Some(Op::Lt { a: tid, b: stride }),
                 );
 
                 kernel.push_if(tid_less_stride, |kernel| {
                     let tid_stride = kernel.raw.def_var(
-                        DType::U32,
+                        DType::Simple(SimpleDType::U32),
                         ValueState::Inline,
                         Some(Op::Add { a: stride, b: tid }),
                     );
                     let scratch_tid_stride = kernel.raw.def_var(
-                        dtype,
+                        DType::Simple(dtype),
                         ValueState::Inline,
                         Some(Op::SharedLoad {
                             mem: tmp_shared,
@@ -556,7 +570,7 @@ pub fn lower_softmax_recursive<'a>(
                 kernel.raw.push_barrier();
 
                 let stride_is_one = kernel.raw.def_var(
-                    DType::Bool,
+                    DType::Simple(SimpleDType::Bool),
                     ValueState::Inline,
                     Some(Op::Eq { a: stride, b: one }),
                 );
@@ -574,7 +588,7 @@ pub fn lower_softmax_recursive<'a>(
             })?;
 
             let row_dot = kernel.raw.def_var(
-                dtype,
+                DType::Simple(dtype),
                 ValueState::Immut,
                 Some(Op::SharedLoad {
                     mem: tmp_shared,
@@ -588,12 +602,12 @@ pub fn lower_softmax_recursive<'a>(
 
             kernel.push_while_loop(Op::Lt { a: col, b: cols }, |kernel| {
                 let row_flat = kernel.raw.def_var(
-                    DType::U32,
+                    DType::Simple(SimpleDType::U32),
                     ValueState::Inline,
                     Some(Op::Mul { a: row, b: cols }),
                 );
                 let idx = kernel.raw.def_var(
-                    DType::U32,
+                    DType::Simple(SimpleDType::U32),
                     ValueState::Immut,
                     Some(Op::Add {
                         a: row_flat,
@@ -601,7 +615,9 @@ pub fn lower_softmax_recursive<'a>(
                     }),
                 );
 
-                let dy_idx = kernel.raw.def_var(dtype, ValueState::Mut, None);
+                let dy_idx = kernel
+                    .raw
+                    .def_var(DType::Simple(dtype), ValueState::Mut, None);
 
                 eval_node(
                     root,
@@ -625,7 +641,7 @@ pub fn lower_softmax_recursive<'a>(
                 )?;
 
                 let y_idx = kernel.raw.def_var(
-                    dtype,
+                    DType::Simple(dtype),
                     ValueState::Inline,
                     Some(Op::ParamLoad {
                         param: saved_param,
@@ -636,7 +652,7 @@ pub fn lower_softmax_recursive<'a>(
                 kernel.register_param(saved_param);
 
                 let dy_minus_row_dot = kernel.raw.def_var(
-                    dtype,
+                    DType::Simple(dtype),
                     ValueState::Inline,
                     Some(Op::Sub {
                         a: dy_idx,
@@ -645,7 +661,7 @@ pub fn lower_softmax_recursive<'a>(
                 );
 
                 let y_scaled_dy_dot = kernel.raw.def_var(
-                    dtype,
+                    DType::Simple(dtype),
                     ValueState::Inline,
                     Some(Op::Mul {
                         a: y_idx,

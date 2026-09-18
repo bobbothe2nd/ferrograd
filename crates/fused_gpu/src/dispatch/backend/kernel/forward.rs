@@ -3,7 +3,7 @@ use crate::{
         CompilationOptions,
         backend::{
             Axis, DType, DispatchOptions, Graph, GraphOp, Metadata, NodeId, Op, Param, ParamId,
-            ParamTy, ValueId, ValueState,
+            ParamTy, SimpleDType, ValueId, ValueState,
             kernel::{
                 Dependencies, KernelsChained, LinkedKernel, NodeInput, RawKernel, SaveIndicator,
             },
@@ -36,7 +36,7 @@ pub fn lower_forward<'a>(
     let mut params = Vec::new();
 
     params.push(Param {
-        dtype: DType::U32,
+        dtype: SimpleDType::U32,
         ty: ParamTy::Uniform,
         pid: 0,
     });
@@ -127,7 +127,7 @@ pub fn lower_forward<'a>(
 
             for &meta_index in &root_node.shape {
                 let dim_val = kernel.raw.def_var(
-                    DType::U32,
+                    DType::Simple(SimpleDType::U32),
                     ValueState::Immut,
                     Some(Op::ReadMeta {
                         param: 0,
@@ -141,13 +141,13 @@ pub fn lower_forward<'a>(
             }
 
             let gid = kernel.raw.def_var(
-                DType::U32,
+                DType::Simple(SimpleDType::U32),
                 ValueState::Mut,
                 Some(Op::GlobalId { axis: Axis::X }),
             );
 
             let mut base = kernel.raw.def_var(
-                DType::U32,
+                DType::Simple(SimpleDType::U32),
                 ValueState::Immut,
                 Some(Op::ConstU32 { value: 0 }),
             );
@@ -156,7 +156,10 @@ pub fn lower_forward<'a>(
             kernel.raw.update_var_state(total, ValueState::Mut);
 
             if dims.len() > 1 {
-                let gid2 = kernel.raw.def_var(DType::U32, ValueState::Mut, None);
+                let gid2 =
+                    kernel
+                        .raw
+                        .def_var(DType::Simple(SimpleDType::U32), ValueState::Mut, None);
 
                 for (i, &d) in dims.iter().enumerate().skip(1) {
                     kernel.raw.overwrite_var(
@@ -186,17 +189,17 @@ pub fn lower_forward<'a>(
             }
 
             let tile_size = kernel.raw.def_var(
-                DType::U32,
+                DType::Simple(SimpleDType::U32),
                 ValueState::Const,
                 Some(Op::ConstU32 { value: tile_size }),
             );
             let local_row = kernel.raw.def_var(
-                DType::U32,
+                DType::Simple(SimpleDType::U32),
                 ValueState::Immut,
                 Some(Op::LocalId { axis: Axis::Y }),
             );
             let local_col = kernel.raw.def_var(
-                DType::U32,
+                DType::Simple(SimpleDType::U32),
                 ValueState::Immut,
                 Some(Op::LocalId { axis: Axis::X }),
             );
@@ -206,7 +209,9 @@ pub fn lower_forward<'a>(
             let out = if root_op.is_compute_gid() && !root_op.is_leaf() {
                 let root_dtype = graph.nodes[root].dtype;
 
-                kernel.raw.def_var(root_dtype, ValueState::Mut, None)
+                kernel
+                    .raw
+                    .def_var(DType::Simple(root_dtype), ValueState::Mut, None)
             } else {
                 ValueId::MAX
             };

@@ -4,7 +4,7 @@ Advanced graph-based GPU compiler for linear algebra and AI/ML/DL.
 
 ## Usage
 
-Should only be used when implementing custom operations. If creating the model, link `ferrograd-nn`. `ferrograd` does this automatically and has stronger correctness guaraantees.
+Should only be used when implementing custom operations. If creating the model, link `ferrograd-nn`. `ferrograd` does this automatically and has stronger correctness guarantees.
 
 Optimizer:
 

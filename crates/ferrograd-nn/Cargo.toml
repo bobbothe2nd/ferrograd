@@ -12,4 +12,4 @@ keywords = ["autodiff", "autograd", "tensor", "machine-learning", "deep-learning
 categories = ["compilers", "mathematics"]
 
 [dependencies]
-fused_gpu = "0.1.0-beta.1"
+fused_gpu = { path = "../fused_gpu" }

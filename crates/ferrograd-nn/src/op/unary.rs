@@ -2,8 +2,8 @@ use fused_gpu::{
     dispatch::{
         CompilationOptions,
         backend::{
-            DType, DispatchOptions, Graph, GraphOp, Node, NodeId, Op, Param, ParamId, ValueId,
-            ValueState,
+            DType, DispatchOptions, Graph, GraphOp, Node, NodeId, Op, Param, ParamId, SimpleDType,
+            ValueId, ValueState,
             kernel::{LinkedKernel, NodeInput, SaveIndicator},
         },
     },
@@ -97,7 +97,7 @@ macro_rules! lower_unary {
                 None => {
                     let node_input = graph.nodes[node_id].inputs[0];
                     let upstream = kernel.raw.def_var(
-                        $dtype,
+                        DType::Simple($dtype),
                         ValueState::Mut,
                         Some($dtype.constant_float(0.0)?),
                     );
@@ -144,7 +144,7 @@ macro_rules! lower_unary {
                     let node = &graph.nodes[node_id];
 
                     let saved = kernel.raw.def_var(
-                        $dtype,
+                        DType::Simple($dtype),
                         ValueState::Mut,
                         Some($dtype.constant_float(0.0)?),
                     );
@@ -181,7 +181,7 @@ macro_rules! lower_unary {
                     };
 
                     let acc = kernel.raw.def_var(
-                        $dtype,
+                        DType::Simple($dtype),
                         ValueState::Mut,
                         Some($dtype.constant_float(0.0)?),
                     );
@@ -280,17 +280,17 @@ pub fn tanh<'a>(graph: &mut Graph<'a>, x: NodeId) -> NodeId {
                 },
                 |kernel: &mut LinkedKernel<'a>, out: ValueId, inp: ValueId, upstream: ValueId| {
                     let one = kernel.raw.def_var(
-                        dtype,
+                        DType::Simple(dtype),
                         ValueState::Inline,
                         Some(Op::ConstF32 { value: 1.0 }),
                     );
                     let forward_squared = kernel.raw.def_var(
-                        dtype,
+                        DType::Simple(dtype),
                         ValueState::Inline,
                         Some(Op::Mul { a: inp, b: inp }),
                     );
                     let one_minus_forward_squared = kernel.raw.def_var(
-                        dtype,
+                        DType::Simple(dtype),
                         ValueState::Inline,
                         Some(Op::Sub {
                             a: one,
@@ -334,28 +334,30 @@ pub fn elu<'a>(graph: &mut Graph<'a>, x: NodeId) -> NodeId {
                 true,
                 |kernel: &mut LinkedKernel<'a>, out: ValueId, inp: ValueId| {
                     let zero = kernel.raw.def_var(
-                        dtype,
+                        DType::Simple(dtype),
                         ValueState::Inline,
                         Some(dtype.constant_float(0.0)?),
                     );
                     let one = kernel.raw.def_var(
-                        dtype,
+                        DType::Simple(dtype),
                         ValueState::Inline,
                         Some(Op::ConstF32 { value: 1.0 }),
                     );
 
-                    let exp_inp =
-                        kernel
-                            .raw
-                            .def_var(dtype, ValueState::Inline, Some(Op::Exp { x: inp }));
+                    let exp_inp = kernel.raw.def_var(
+                        DType::Simple(dtype),
+                        ValueState::Inline,
+                        Some(Op::Exp { x: inp }),
+                    );
+
                     let exp_inp_minus_one = kernel.raw.def_var(
-                        dtype,
+                        DType::Simple(dtype),
                         ValueState::Inline,
                         Some(Op::Sub { a: exp_inp, b: one }),
                     );
 
                     let cond = kernel.raw.def_var(
-                        DType::Bool,
+                        DType::Simple(SimpleDType::Bool),
                         ValueState::Inline,
                         Some(Op::Ge { a: inp, b: zero }),
                     );
@@ -372,23 +374,23 @@ pub fn elu<'a>(graph: &mut Graph<'a>, x: NodeId) -> NodeId {
                 },
                 |kernel: &mut LinkedKernel<'a>, out: ValueId, inp: ValueId, upstream: ValueId| {
                     let zero = kernel.raw.def_var(
-                        dtype,
+                        DType::Simple(dtype),
                         ValueState::Inline,
                         Some(dtype.constant_float(0.0)?),
                     );
                     let one = kernel.raw.def_var(
-                        dtype,
+                        DType::Simple(dtype),
                         ValueState::Inline,
                         Some(Op::ConstF32 { value: 1.0 }),
                     );
 
                     let forward_plus_one = kernel.raw.def_var(
-                        dtype,
+                        DType::Simple(dtype),
                         ValueState::Inline,
                         Some(Op::Add { a: inp, b: one }),
                     );
                     let upstream_forward_plus_one = kernel.raw.def_var(
-                        dtype,
+                        DType::Simple(dtype),
                         ValueState::Inline,
                         Some(Op::Mul {
                             a: upstream,
@@ -397,7 +399,7 @@ pub fn elu<'a>(graph: &mut Graph<'a>, x: NodeId) -> NodeId {
                     );
 
                     let cond = kernel.raw.def_var(
-                        DType::Bool,
+                        DType::Simple(SimpleDType::Bool),
                         ValueState::Inline,
                         Some(Op::Ge { a: inp, b: zero }),
                     );
@@ -439,7 +441,7 @@ pub fn relu<'a>(graph: &mut Graph<'a>, x: NodeId) -> NodeId {
                 true,
                 |kernel: &mut LinkedKernel<'a>, out: ValueId, inp: ValueId| {
                     let zero = kernel.raw.def_var(
-                        dtype,
+                        DType::Simple(dtype),
                         ValueState::Inline,
                         Some(dtype.constant_float(0.0)?),
                     );
@@ -450,13 +452,13 @@ pub fn relu<'a>(graph: &mut Graph<'a>, x: NodeId) -> NodeId {
                 },
                 |kernel: &mut LinkedKernel<'a>, out: ValueId, inp: ValueId, upstream: ValueId| {
                     let zero = kernel.raw.def_var(
-                        dtype,
+                        DType::Simple(dtype),
                         ValueState::Inline,
                         Some(dtype.constant_float(0.0)?),
                     );
 
                     let cond = kernel.raw.def_var(
-                        DType::Bool,
+                        DType::Simple(SimpleDType::Bool),
                         ValueState::Inline,
                         Some(Op::Ge { a: inp, b: zero }),
                     );
@@ -498,56 +500,56 @@ pub fn gelu<'a>(graph: &mut Graph<'a>, x: NodeId) -> NodeId {
                 true,
                 |kernel: &mut LinkedKernel<'a>, out: ValueId, inp: ValueId| {
                     let gelu_a = kernel.raw.def_var(
-                        dtype,
+                        DType::Simple(dtype),
                         ValueState::Inline,
                         Some(Op::ConstF32 {
                             value: THAT_RANDOM_DECIMAL,
                         }),
                     );
                     let gelu_b = kernel.raw.def_var(
-                        dtype,
+                        DType::Simple(dtype),
                         ValueState::Inline,
                         Some(Op::ConstF32 {
                             value: SQRT_FRAC_PI_2,
                         }),
                     );
                     let half = kernel.raw.def_var(
-                        dtype,
+                        DType::Simple(dtype),
                         ValueState::Inline,
                         Some(Op::ConstF32 { value: 0.5 }),
                     );
                     let one = kernel.raw.def_var(
-                        dtype,
+                        DType::Simple(dtype),
                         ValueState::Inline,
                         Some(Op::ConstF32 { value: 1.0 }),
                     );
 
                     let xx = kernel.raw.def_var(
-                        dtype,
+                        DType::Simple(dtype),
                         ValueState::Inline,
                         Some(Op::Mul { a: inp, b: inp }),
                     );
 
                     let xxx = kernel.raw.def_var(
-                        dtype,
+                        DType::Simple(dtype),
                         ValueState::Inline,
                         Some(Op::Mul { a: xx, b: inp }),
                     );
 
                     let a_x3 = kernel.raw.def_var(
-                        dtype,
+                        DType::Simple(dtype),
                         ValueState::Inline,
                         Some(Op::Mul { a: xxx, b: gelu_a }),
                     );
 
                     let x_plus_a_x3 = kernel.raw.def_var(
-                        dtype,
+                        DType::Simple(dtype),
                         ValueState::Inline,
                         Some(Op::Add { a: inp, b: a_x3 }),
                     );
 
                     let b_x_plus_a_x3 = kernel.raw.def_var(
-                        dtype,
+                        DType::Simple(dtype),
                         ValueState::Inline,
                         Some(Op::Mul {
                             a: gelu_b,
@@ -556,19 +558,19 @@ pub fn gelu<'a>(graph: &mut Graph<'a>, x: NodeId) -> NodeId {
                     );
 
                     let tanh_u = kernel.raw.def_var(
-                        dtype,
+                        DType::Simple(dtype),
                         ValueState::Inline,
                         Some(Op::Tanh { x: b_x_plus_a_x3 }),
                     );
 
                     let one_plus_tanh_u = kernel.raw.def_var(
-                        dtype,
+                        DType::Simple(dtype),
                         ValueState::Inline,
                         Some(Op::Add { a: one, b: tanh_u }),
                     );
 
                     let half_x = kernel.raw.def_var(
-                        dtype,
+                        DType::Simple(dtype),
                         ValueState::Inline,
                         Some(Op::Mul { a: half, b: inp }),
                     );
@@ -585,36 +587,36 @@ pub fn gelu<'a>(graph: &mut Graph<'a>, x: NodeId) -> NodeId {
                 },
                 |kernel: &mut LinkedKernel<'a>, out: ValueId, inp: ValueId, upstream: ValueId| {
                     let half = kernel.raw.def_var(
-                        dtype,
+                        DType::Simple(dtype),
                         ValueState::Inline,
                         Some(Op::ConstF32 { value: 0.5 }),
                     );
                     let one = kernel.raw.def_var(
-                        dtype,
+                        DType::Simple(dtype),
                         ValueState::Inline,
                         Some(Op::ConstF32 { value: 1.0 }),
                     );
                     let three = kernel.raw.def_var(
-                        dtype,
+                        DType::Simple(dtype),
                         ValueState::Inline,
                         Some(Op::ConstF32 { value: 3.0 }),
                     );
                     let gelu_a = kernel.raw.def_var(
-                        dtype,
+                        DType::Simple(dtype),
                         ValueState::Inline,
                         Some(Op::ConstF32 {
                             value: THAT_RANDOM_DECIMAL,
                         }),
                     );
                     let gelu_b = kernel.raw.def_var(
-                        dtype,
+                        DType::Simple(dtype),
                         ValueState::Inline,
                         Some(Op::ConstF32 {
                             value: SQRT_FRAC_PI_2,
                         }),
                     );
                     let gelu_c = kernel.raw.def_var(
-                        dtype,
+                        DType::Simple(dtype),
                         ValueState::Const,
                         Some(Op::Mul {
                             a: gelu_a,
@@ -623,43 +625,43 @@ pub fn gelu<'a>(graph: &mut Graph<'a>, x: NodeId) -> NodeId {
                     );
 
                     let xx = kernel.raw.def_var(
-                        dtype,
+                        DType::Simple(dtype),
                         ValueState::Inline,
                         Some(Op::Mul { a: inp, b: inp }),
                     );
 
                     let one_plus_t = kernel.raw.def_var(
-                        dtype,
+                        DType::Simple(dtype),
                         ValueState::Immut,
                         Some(Op::Add { a: one, b: inp }),
                     );
 
                     let tt = kernel.raw.def_var(
-                        dtype,
+                        DType::Simple(dtype),
                         ValueState::Inline,
                         Some(Op::Mul { a: inp, b: inp }),
                     );
 
                     let one_minus_tt = kernel.raw.def_var(
-                        dtype,
+                        DType::Simple(dtype),
                         ValueState::Immut,
                         Some(Op::Sub { a: one, b: tt }),
                     );
 
                     let c_xx = kernel.raw.def_var(
-                        dtype,
+                        DType::Simple(dtype),
                         ValueState::Inline,
                         Some(Op::Mul { a: gelu_c, b: xx }),
                     );
 
                     let one_plus_c_xx = kernel.raw.def_var(
-                        dtype,
+                        DType::Simple(dtype),
                         ValueState::Inline,
                         Some(Op::Add { a: one, b: c_xx }),
                     );
 
                     let du_dx = kernel.raw.def_var(
-                        dtype,
+                        DType::Simple(dtype),
                         ValueState::Immut,
                         Some(Op::Mul {
                             a: gelu_b,
@@ -668,13 +670,13 @@ pub fn gelu<'a>(graph: &mut Graph<'a>, x: NodeId) -> NodeId {
                     );
 
                     let x_du_dx = kernel.raw.def_var(
-                        dtype,
+                        DType::Simple(dtype),
                         ValueState::Immut,
                         Some(Op::Mul { a: inp, b: du_dx }),
                     );
 
                     let one_minus_tt_x_du_dx = kernel.raw.def_var(
-                        dtype,
+                        DType::Simple(dtype),
                         ValueState::Immut,
                         Some(Op::Mul {
                             a: one_minus_tt,
@@ -683,7 +685,7 @@ pub fn gelu<'a>(graph: &mut Graph<'a>, x: NodeId) -> NodeId {
                     );
 
                     let two_dy_dx = kernel.raw.def_var(
-                        dtype,
+                        DType::Simple(dtype),
                         ValueState::Immut,
                         Some(Op::Add {
                             a: one_plus_t,
@@ -692,7 +694,7 @@ pub fn gelu<'a>(graph: &mut Graph<'a>, x: NodeId) -> NodeId {
                     );
 
                     let dy_dx = kernel.raw.def_var(
-                        dtype,
+                        DType::Simple(dtype),
                         ValueState::Immut,
                         Some(Op::Mul {
                             a: half,
@@ -784,17 +786,17 @@ pub fn abs<'a>(graph: &mut Graph<'a>, x: NodeId) -> NodeId {
                 },
                 |kernel: &mut LinkedKernel<'a>, out: ValueId, inp: ValueId, upstream: ValueId| {
                     let zero = kernel.raw.def_var(
-                        dtype,
+                        DType::Simple(dtype),
                         ValueState::Inline,
                         Some(dtype.constant_float(0.0)?),
                     );
                     let ge0 = kernel.raw.def_var(
-                        dtype,
+                        DType::Simple(dtype),
                         ValueState::Inline,
                         Some(Op::Ge { a: inp, b: zero }),
                     );
                     let le0 = kernel.raw.def_var(
-                        dtype,
+                        DType::Simple(dtype),
                         ValueState::Inline,
                         Some(Op::Ge { a: inp, b: zero }),
                     );
