@@ -17,6 +17,9 @@ pub mod kernel;
 #[cfg(feature = "wgsl")]
 pub mod wgsl;
 
+#[cfg(feature = "rocm")]
+pub mod rocm;
+
 mod ops;
 
 pub use ops::Op;
@@ -27,14 +30,11 @@ pub type GpuContext = wgsl::GpuContext;
 pub type GpuContext = NopGpuContext;
 
 #[cfg(feature = "wgsl")]
-pub type GpuBuffer = wgsl::GpuBuffer;
+pub type GpuBuffer = wgsl::Buffer;
 #[cfg(not(feature = "wgsl"))]
-pub type GpuBuffer = NopGpuBuffer;
+pub type GpuBuffer = ();
 
-#[derive(Debug, Clone)]
-pub struct NopGpuBuffer;
-
-impl GpuBufferBackend for NopGpuBuffer {
+impl GpuBufferBackend for () {
     fn size(&self) -> u32 {
         0
     }
@@ -44,10 +44,7 @@ impl GpuBufferBackend for NopGpuBuffer {
     }
 }
 
-#[derive(Clone)]
-pub struct NopGpuKernel;
-
-impl GpuKernelBackend for NopGpuKernel {
+impl GpuKernelBackend for () {
     fn block(&self) -> &[u32; 3] {
         &[0, 0, 0]
     }
@@ -72,12 +69,10 @@ impl NopGpuContext {
 }
 
 impl GpuBackend for NopGpuContext {
-    type Buffer = NopGpuBuffer;
-    type Kernel = NopGpuKernel;
-    type ParamLayout = ();
-    type SubmissionIndex = ();
+    type Buffer = ();
+    type MetaBuf = ();
+    type Kernel = ();
     type Schedule = ();
-    type SyncSubmissions = ();
     type Batcher<'a> = ();
     type BatchState = ();
 
@@ -87,16 +82,28 @@ impl GpuBackend for NopGpuContext {
         }
     }
 
-    fn alloc(&self, _len: usize) -> Self::Buffer {
-        NopGpuBuffer
+    fn alloc(&self, _len: u32) -> Result<Self::Buffer, Error> {
+        Err(Error {
+            msg: "using nop backend",
+            kind: ErrorKind::UnsupportedFeature,
+            ctx: (),
+        })
     }
 
-    fn alloc_init(&self, _data: &[u8]) -> Self::Buffer {
-        NopGpuBuffer
+    fn alloc_init(&self, _data: &[u8]) -> Result<Self::Buffer, Error> {
+        Err(Error {
+            msg: "using nop backend",
+            kind: ErrorKind::UnsupportedFeature,
+            ctx: (),
+        })
     }
 
-    fn alloc_meta(&self, _data: &[u32]) -> Self::Buffer {
-        NopGpuBuffer
+    fn alloc_meta(&self, _data: &[u32]) -> Result<Self::MetaBuf, Error> {
+        Err(Error {
+            msg: "using nop backend",
+            kind: ErrorKind::UnsupportedFeature,
+            ctx: (),
+        })
     }
 
     fn compile(
@@ -126,14 +133,38 @@ impl GpuBackend for NopGpuContext {
         _kernel: &Self::Kernel,
         _wg: [u32; 3],
         _bindings: &[&Self::Buffer],
-    ) {
+        _meta: &Self::MetaBuf,
+    ) -> Result<(), Error> {
+        Err(Error {
+            msg: "using nop backend",
+            kind: ErrorKind::UnsupportedFeature,
+            ctx: (),
+        })
     }
 
-    fn dispatch_schedule(&self, _batcher: &mut Self::Batcher<'_>, _schedule: &Self::Schedule) {}
+    fn dispatch_schedule(&self, _batcher: &mut Self::Batcher<'_>, _schedule: &Self::Schedule) -> Result<(), Error> {
+        Err(Error {
+            msg: "using nop backend",
+            kind: ErrorKind::UnsupportedFeature,
+            ctx: (),
+        })
+    }
 
-    fn encode(&self, _state: Self::BatchState) -> Self::SyncSubmissions {}
+    fn encode(&self, _state: Self::BatchState) -> Result<(), Error> {
+        Err(Error {
+            msg: "using nop backend",
+            kind: ErrorKind::UnsupportedFeature,
+            ctx: (),
+        })
+    }
 
-    fn prepare_batch(&self) -> Self::BatchState {}
+    fn prepare_batch(&self) -> Result<Self::BatchState, Error> {
+        Err(Error {
+            msg: "using nop backend",
+            kind: ErrorKind::UnsupportedFeature,
+            ctx: (),
+        })
+    }
 
     fn start_batch<'a>(&self, _state: &'a mut Self::BatchState) -> Self::Batcher<'a> {}
 
@@ -154,16 +185,20 @@ impl GpuBackend for NopGpuContext {
         super::PollStatus::Failed
     }
 
-    fn sync(&self, _submission_index: Self::SubmissionIndex) {}
-
-    fn submit(&self, _submission: Self::SyncSubmissions) -> Self::SubmissionIndex {}
+    fn sync(&self) -> Result<(), Error> {
+        Err(Error {
+            msg: "using nop backend",
+            kind: ErrorKind::UnsupportedFeature,
+            ctx: (),
+        })
+    }
 
     fn upload(
         &self,
         _buffer: &Self::Buffer,
         _data: &[u8],
         _dst_off: u32,
-    ) -> Result<Self::SubmissionIndex, Error> {
+    ) -> Result<(), Error> {
         Err(Error {
             msg: "using nop backend",
             kind: ErrorKind::UnsupportedFeature,
@@ -175,7 +210,7 @@ impl GpuBackend for NopGpuContext {
         &self,
         _src: &Self::Buffer,
         _dst: &Self::Buffer,
-    ) -> Result<Self::SubmissionIndex, Error> {
+    ) -> Result<(), Error> {
         Err(Error {
             msg: "using nop backend",
             kind: ErrorKind::UnsupportedFeature,

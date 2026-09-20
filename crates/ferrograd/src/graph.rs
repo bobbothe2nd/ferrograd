@@ -2,18 +2,12 @@ use std::ops::{Index, IndexMut};
 
 use crate::{
     backend::SavedNodes,
-    dispatch::{DType, LossType, OptimType},
+    dispatch::{LossType, OptimType, CompilationOptions, Metadata, Node, SimpleDType, KernelGroup},
     id::{EdgeId, NodeId},
     tensor::{bf16, f16},
 };
 use briny::raw::alloc::cast_vec;
-use fused_gpu::{
-    dispatch::{
-        CompilationOptions,
-        backend::{Graph as InnerGraph, Metadata, Node, kernel::KernelGroup},
-    },
-    errors::{Error, GraphErrorContext},
-};
+use fused_gpu::{dispatch::backend::Graph as InnerGraph, errors::{Error, GraphErrorContext}};
 
 pub struct Graph<'a>(pub(crate) InnerGraph<'a>);
 
@@ -107,7 +101,7 @@ pub struct DefineOps<'a, 'b> {
 }
 
 impl DefineOps<'_, '_> {
-    pub fn input(&mut self, shape: &[usize], dtype: DType) -> NodeId {
+    pub fn input(&mut self, shape: &[usize], dtype: SimpleDType) -> NodeId {
         NodeId(self.graph.0.input(shape, dtype))
     }
 

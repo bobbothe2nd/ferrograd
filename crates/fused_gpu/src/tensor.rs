@@ -64,7 +64,6 @@ pub trait ToBuffer<B: GpuBackend> {
 ///
 /// Can only be constructed through a [`GpuContext`](`crate::dispatch::GpuContext`) because it
 /// requires a buffer to be allocated on the GPU first.
-#[derive(Debug)]
 pub struct Tensor<B: GpuBackend = crate::dispatch::backend::GpuContext> {
     pub(crate) shape: Vec<u32>,
     pub(crate) data: GpuBuffer<B>,

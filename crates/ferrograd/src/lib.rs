@@ -7,14 +7,14 @@ pub use fused_gpu::tensor;
 
 pub mod dispatch {
     pub use fused_gpu::dispatch::{
-        AllocTensors, BatchState, Batcher, CompilationOptions, DebugCompilationOptions, GpuBackend,
+        AllocTensors, CompilationOptions, DebugCompilationOptions, GpuBackend,
         GpuBuffer, GpuBufferBackend, GpuKernelBackend, OptCompilationOptions, OptFlags, PollStatus,
-        SubmissionIndex, SyncSubmission, TargetCompilationOptions,
+        TargetCompilationOptions, BatchState, Batcher,
     };
 
     pub use fused_gpu::dispatch::backend::{
         Axis, DType, DispatchOptions, GraphOp, LossType, Metadata, Node, Op, OptimState, OptimType,
-        Param, ParamTy, SharedAlloc, StateDim, Value, ValueState,
+        Param, ParamTy, SharedAlloc, StateDim, Value, ValueState, SimpleDType,
     };
 
     pub use fused_gpu::dispatch::backend::kernel::{
@@ -28,17 +28,22 @@ pub mod dispatch {
 
     pub use crate::{
         backend::{
-            DynBatchState, DynBatcher, DynBuffer, DynKernel, DynParamLayout, DynSchedule,
-            DynSubmissionIndex, DynSyncSubmissions, Dynamic, GpuContext, MetaBinding, SavedNodes,
+            GpuContext, MetaBinding, SavedNodes,
             Schedule,
         },
         graph::{DefineOps, Graph},
         id::{EdgeId, MetaId, NodeId, ParamId, SharedId, ValueId},
     };
+
+    pub mod backend {
+        pub use crate::backend::{DynBatchState as BatchState, DynBatcher as Batcher, DynBuffer as Buffer, DynKernel as Kernel, DynSchedule as Schedule, Dynamic};
+    }
 }
 
 pub mod errors {
     pub use fused_gpu::errors::{Error, ErrorKind};
+
+    pub type Result<T> = core::result::Result<T, Error>;
 }
 
 pub mod io {
@@ -68,6 +73,6 @@ pub mod nn {
     pub use ferrograd_nn::op::*;
 }
 
-// #[allow(dead_code)]
-// #[doc = include_str!("../README.md")]
-// fn test() {}
+#[allow(dead_code)]
+#[doc = include_str!("../README.md")]
+fn test() {}

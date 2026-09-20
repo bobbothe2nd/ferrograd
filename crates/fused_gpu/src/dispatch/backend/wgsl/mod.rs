@@ -3,7 +3,7 @@ use crate::{
         CompilationOptions, DebugCompilationOptions, GpuBackend, GpuBufferBackend,
         GpuKernelBackend, PollStatus, TargetCompilationOptions, TargetFlags,
         backend::{
-            Axis, DType, MetaId, NodeId, Op, Param, ParamTy, SimpleDType, ValueId, ValueState,
+            MetaId, NodeId, Param,
             kernel::{Dependencies, RawKernel, Redirect},
         },
     },
@@ -11,8 +11,7 @@ use crate::{
     tensor::{ToBuffer, build_dims, calc_grid},
 };
 use briny::raw::cast::cast_slice;
-use core::{fmt::Write, num::NonZeroU64, str::FromStr};
-use std::{string::String, vec::Vec};
+use std::vec::Vec;
 
 pub use wgpu::{
     BackendOptions, Backends, BindGroup, BindGroupDescriptor, BindGroupEntry,
@@ -29,6 +28,8 @@ pub use wgpu::{
     util::{BufferInitDescriptor, DeviceExt},
 };
 
+mod generate;
+
 /// WGPU context for device and queue.
 #[derive(Debug)]
 pub struct GpuContext {
@@ -38,7 +39,7 @@ pub struct GpuContext {
 
 impl GpuContext {
     /// Constructs a new context asynchronously.
-    pub async fn new() -> Result<Self, crate::errors::Error> {
+    pub async fn new() -> Result<Self, Error> {
         let instance = Instance::new(InstanceDescriptor {
             backends: Backends::all(),
             flags: InstanceFlags::empty(),
@@ -77,7 +78,7 @@ impl GpuContext {
                 },
                 _ => Error {
                     msg: "no adapter found",
-                    kind: ErrorKind::AdapterNotFound,
+                    kind: ErrorKind::InvalidDevice,
                     ctx: (),
                 },
             })?;
@@ -108,7 +109,7 @@ impl GpuContext {
                 .await
                 .map_err(|_| Error {
                     msg: "failed to request device",
-                    kind: ErrorKind::DeviceNotFound,
+                    kind: ErrorKind::InvalidDevice,
                     ctx: (),
                 })?,
         };
@@ -139,12 +140,10 @@ pub struct Schedule {
 }
 
 impl GpuBackend for GpuContext {
-    type Buffer = GpuBuffer;
+    type Buffer = Buffer;
+    type MetaBuf = Buffer;
     type Kernel = GpuKernel;
-    type SubmissionIndex = SubmissionIndex;
-    type ParamLayout = PipelineLayout;
     type Schedule = Schedule;
-    type SyncSubmissions = CommandBuffer;
     type Batcher<'a> = ComputePass<'a>;
     type BatchState = CommandEncoder;
 
@@ -155,8 +154,8 @@ impl GpuBackend for GpuContext {
     }
 
     #[inline]
-    fn alloc(&self, len: usize) -> Self::Buffer {
-        GpuBuffer(self.device.create_buffer(&BufferDescriptor {
+    fn alloc(&self, len: u32) -> Result<Self::Buffer, Error> {
+        Ok(self.device.create_buffer(&BufferDescriptor {
             label: Some("gpu_tensor"),
             size: len as u64,
             usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC | BufferUsages::COPY_DST,
@@ -165,8 +164,8 @@ impl GpuBackend for GpuContext {
     }
 
     #[inline]
-    fn alloc_init(&self, contents: &[u8]) -> Self::Buffer {
-        GpuBuffer(self.device.create_buffer_init(&BufferInitDescriptor {
+    fn alloc_init(&self, contents: &[u8]) -> Result<Self::Buffer, Error> {
+        Ok(self.device.create_buffer_init(&BufferInitDescriptor {
             label: Some("gpu_tensor"),
             contents,
             usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC | BufferUsages::COPY_DST,
@@ -174,13 +173,13 @@ impl GpuBackend for GpuContext {
     }
 
     #[inline]
-    fn alloc_meta(&self, data: &[u32]) -> Self::Buffer {
+    fn alloc_meta(&self, data: &[u32]) -> Result<Self::Buffer, Error> {
         let offset = (4 - (data.len() % 4)) % 4;
         let new_len = data.len() + offset;
         let mut aligned = std::vec![u32::MAX; new_len];
         aligned[..data.len()].copy_from_slice(data);
 
-        GpuBuffer(self.device.create_buffer_init(&BufferInitDescriptor {
+        Ok(self.device.create_buffer_init(&BufferInitDescriptor {
             label: Some("gpu_meta"),
             contents: cast_slice(&aligned),
             usage: BufferUsages::UNIFORM,
@@ -193,7 +192,7 @@ impl GpuBackend for GpuContext {
         buffer: &Self::Buffer,
         data: &[u8],
         dst_off: u32,
-    ) -> Result<Self::SubmissionIndex, Error> {
+    ) -> Result<(), Error> {
         if buffer.size_bytes().saturating_sub(dst_off) as usize > data.len() {
             return Err(Error {
                 msg: "CPU buffer of smaller size than GPU buffer during upload",
@@ -210,15 +209,17 @@ impl GpuBackend for GpuContext {
             contents: data,
             usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC,
         });
-        encoder.copy_buffer_to_buffer(&src, 0, &buffer.0, dst_off as u64, Some(data.len() as u64));
+        encoder.copy_buffer_to_buffer(&src, 0, &buffer, dst_off as u64, Some(data.len() as u64));
 
-        Ok(self.queue.submit(Some(encoder.finish())))
+        self.queue.submit(Some(encoder.finish()));
+
+        Ok(())
     }
 
-    fn pipe(&self, src: &Self::Buffer, dst: &Self::Buffer) -> Result<Self::SubmissionIndex, Error> {
-        let src_size = src.0.size();
+    fn pipe(&self, src: &Self::Buffer, dst: &Self::Buffer) -> Result<(), Error> {
+        let src_size = src.size();
 
-        if src_size != dst.0.size() {
+        if src_size != dst.size() {
             return Err(Error {
                 msg: "buffers of unequal sizes during pipe",
                 kind: ErrorKind::FailedBufferCopy,
@@ -230,9 +231,11 @@ impl GpuBackend for GpuContext {
             .device
             .create_command_encoder(&CommandEncoderDescriptor::default());
 
-        encoder.copy_buffer_to_buffer(&src.0, 0, &dst.0, 0, src_size);
+        encoder.copy_buffer_to_buffer(&src, 0, &dst, 0, src_size);
 
-        Ok(self.queue.submit(Some(encoder.finish())))
+        self.queue.submit(Some(encoder.finish()));
+
+        Ok(())
     }
 
     #[inline]
@@ -250,11 +253,11 @@ impl GpuBackend for GpuContext {
             .create_command_encoder(&CommandEncoderDescriptor::default());
         let dst = self.device.create_buffer(&BufferDescriptor {
             label: Some("download"),
-            size: buffer.0.size(),
+            size: buffer.size(),
             usage: BufferUsages::MAP_READ | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        encoder.copy_buffer_to_buffer(&buffer.0, 0, &dst, 0, buffer.0.size());
+        encoder.copy_buffer_to_buffer(&buffer, 0, &dst, 0, buffer.size());
         let submission_index = self.queue.submit(Some(encoder.finish()));
         let buffer_slice = dst.slice(..);
 
@@ -293,7 +296,7 @@ impl GpuBackend for GpuContext {
         params: &[Param],
         options: &CompilationOptions,
     ) -> Result<Self::Kernel, Error> {
-        let entries = generate_layout_desc(params);
+        let entries = generate::generate_layout_desc(params);
         let desc = BindGroupLayoutDescriptor {
             label: Some("bind_group_layout"),
             entries: &entries,
@@ -309,7 +312,7 @@ impl GpuBackend for GpuContext {
         };
         let pipeline_layout = self.device.create_pipeline_layout(&desc);
 
-        let source = generate_wgsl(
+        let source = generate::generate_wgsl(
             src,
             params,
             options
@@ -386,7 +389,7 @@ impl GpuBackend for GpuContext {
                             if params[i] {
                                 let entry = BindGroupEntry {
                                     binding: i as u32,
-                                    resource: buf.0.as_entire_binding(),
+                                    resource: buf.as_entire_binding(),
                                 };
 
                                 Some(entry)
@@ -416,11 +419,11 @@ impl GpuBackend for GpuContext {
         })
     }
 
-    fn prepare_batch(&self) -> Self::BatchState {
-        self.device
+    fn prepare_batch(&self) -> Result<Self::BatchState, Error> {
+        Ok(self.device
             .create_command_encoder(&CommandEncoderDescriptor {
                 label: Some("encoder"),
-            })
+            }))
     }
 
     fn start_batch<'a>(&self, encoder: &'a mut Self::BatchState) -> Self::Batcher<'a> {
@@ -430,13 +433,15 @@ impl GpuBackend for GpuContext {
         })
     }
 
-    fn dispatch_schedule(&self, pass: &mut Self::Batcher<'_>, schedule: &Self::Schedule) {
+    fn dispatch_schedule(&self, pass: &mut Self::Batcher<'_>, schedule: &Self::Schedule) -> Result<(), Error> {
         for (kernel, wg, bind_group) in &schedule.kernels {
             pass.set_pipeline(kernel);
             pass.set_bind_group(0, bind_group, &[]);
 
             pass.dispatch_workgroups(wg[0], wg[1], wg[2]);
         }
+
+        Ok(())
     }
 
     #[inline]
@@ -446,17 +451,25 @@ impl GpuBackend for GpuContext {
         kernel: &Self::Kernel,
         wg: [u32; 3],
         bindings: &[&Self::Buffer],
-    ) {
+        meta: &Self::MetaBuf,
+    ) -> Result<(), Error> {
         let kernel = &kernel.kernel;
 
-        let entries = bindings
+        let mut entries = Vec::with_capacity(1 + bindings.len());
+
+        entries.push(BindGroupEntry {
+            binding: 0,
+            resource: meta.as_entire_binding(),
+        });
+
+        bindings
             .iter()
             .enumerate()
             .map(|(i, x)| BindGroupEntry {
-                binding: i as u32,
-                resource: x.0.as_entire_binding(),
+                binding: 1 + i as u32,
+                resource: x.as_entire_binding(),
             })
-            .collect::<Vec<_>>();
+            .for_each(|entry| entries.push(entry));
 
         let bind_group = self.device.create_bind_group(&BindGroupDescriptor {
             layout: &kernel.get_bind_group_layout(0),
@@ -468,22 +481,28 @@ impl GpuBackend for GpuContext {
         pass.set_bind_group(0, &bind_group, &[]);
 
         pass.dispatch_workgroups(wg[0], wg[1], wg[2]);
+
+        Ok(())
     }
 
     #[inline]
-    fn sync(&self, submission_index: Self::SubmissionIndex) {
-        let _ = self.device.poll(PollType::Wait {
-            submission_index: Some(submission_index),
+    fn sync(&self) -> Result<(), Error> {
+        self.device.poll(PollType::Wait {
+            submission_index: None,
             timeout: None,
-        });
+        }).map_err(|_| Error {
+            kind: ErrorKind::PollFailed,
+            msg: "failed to poll GPU for completion",
+            ctx: (),
+        })?;
+
+        Ok(())
     }
 
-    fn encode(&self, state: Self::BatchState) -> Self::SyncSubmissions {
-        state.finish()
-    }
-
-    fn submit(&self, submission: Self::SyncSubmissions) -> Self::SubmissionIndex {
-        self.queue.submit([submission])
+    fn encode(&self, state: Self::BatchState) -> Result<(), Error> {
+        let cmd = state.finish();
+        self.queue.submit(Some(cmd));
+        Ok(())
     }
 
     #[inline]
@@ -499,24 +518,19 @@ impl GpuBackend for GpuContext {
     }
 }
 
-/// Handle to a GPU allocation.
-#[repr(transparent)]
-#[derive(Debug, Clone)]
-pub struct GpuBuffer(Buffer);
-
-impl GpuBufferBackend for GpuBuffer {
+impl GpuBufferBackend for Buffer {
     #[inline]
     fn size_bytes(&self) -> u32 {
-        self.0.size() as u32
+        self.size() as u32
     }
 
     #[inline]
     fn size(&self) -> u32 {
-        (self.0.size() / (size_of::<f32>() as u64)) as u32
+        (self.size() / (size_of::<f32>() as u64)) as u32
     }
 }
 
-impl ToBuffer<GpuContext> for GpuBuffer {
+impl ToBuffer<GpuContext> for Buffer {
     #[inline]
     fn as_buffer(&self) -> &Self {
         self
@@ -526,805 +540,4 @@ impl ToBuffer<GpuContext> for GpuBuffer {
     fn to_buffer(self) -> Self {
         self
     }
-}
-
-#[inline]
-fn generate_layout_desc(params: &[Param]) -> Vec<BindGroupLayoutEntry> {
-    const MIN_BIND_SIZE: NonZeroU64 = NonZeroU64::new(1024).unwrap();
-
-    params
-        .iter()
-        .map(|x| {
-            let ty = match x.ty {
-                ParamTy::Uniform => BufferBindingType::Uniform,
-                ParamTy::ReadOnly => BufferBindingType::Storage { read_only: true },
-                ParamTy::ReadWrite => BufferBindingType::Storage { read_only: false },
-            };
-
-            BindGroupLayoutEntry {
-                binding: x.pid as u32,
-                visibility: ShaderStages::COMPUTE,
-                ty: BindingType::Buffer {
-                    ty,
-                    has_dynamic_offset: false,
-                    min_binding_size: match ty {
-                        BufferBindingType::Uniform => None,
-                        BufferBindingType::Storage { .. } => Some(MIN_BIND_SIZE),
-                    },
-                },
-                count: None,
-            }
-        })
-        .collect::<Vec<_>>()
-}
-
-#[inline]
-fn generate_wgsl(
-    kernel: &RawKernel,
-    params: &[Param],
-    pretty_print: bool,
-) -> Result<String, Error> {
-    let mut out = String::from_str("enable f16;").map_err(|_| Error {
-        msg: "infallible",
-        kind: ErrorKind::InternalError,
-        ctx: (),
-    })?;
-
-    newline(pretty_print, &mut out, 0);
-
-    emit_bindings(kernel, params, &mut out, pretty_print)?;
-    newline(pretty_print, &mut out, 0);
-
-    emit_entry(kernel, &mut out, pretty_print)?;
-
-    Ok(out)
-}
-
-#[inline]
-const fn get_axis(axis: Axis) -> &'static str {
-    match axis {
-        Axis::X => "x",
-        Axis::Y => "y",
-        Axis::Z => "z",
-    }
-}
-
-#[inline]
-const fn get_dtype(dtype: DType) -> Result<&'static str, Error> {
-    let DType::Simple(dtype) = dtype else {
-        return Err(Error {
-            msg: "MMA not supported",
-            kind: ErrorKind::UnsupportedFeature,
-            ctx: (),
-        });
-    };
-
-    get_simple_dtype(dtype)
-}
-
-#[inline]
-const fn get_simple_dtype(dtype: SimpleDType) -> Result<&'static str, Error> {
-    match dtype {
-        SimpleDType::F64 => Ok("f64"),
-        SimpleDType::F32 => Ok("f32"),
-        SimpleDType::F16 => Ok("f16"),
-        SimpleDType::BF16 => Err(Error {
-            msg: "bf16 not supported",
-            kind: ErrorKind::UnsupportedFeature,
-            ctx: (),
-        }),
-        SimpleDType::Bool => Ok("bool"),
-        SimpleDType::I32 => Ok("i32"),
-        SimpleDType::U32 => Ok("u32"),
-    }
-}
-
-#[inline]
-fn newline(pretty_print: bool, out: &mut String, nesting: usize) {
-    if pretty_print {
-        let _ = write!(out, "\n{}", "  ".repeat(nesting));
-    } else {
-        let _ = write!(out, " ");
-    }
-}
-
-#[inline]
-fn tab(pretty_print: bool, out: &mut String) {
-    if pretty_print {
-        let _ = write!(out, "  ");
-    }
-}
-
-#[inline]
-fn emit_bindings(
-    kernel: &RawKernel,
-    params: &[Param],
-    out: &mut String,
-    pretty_print: bool,
-) -> Result<(), Error> {
-    let _ = write!(out, "struct Meta {{");
-    newline(pretty_print, out, 0);
-    let _ = write!(out, "f0: f32,");
-    for f in 1..kernel.meta.fields {
-        newline(pretty_print, out, 1);
-        let _ = write!(out, "f{f}: u32,");
-    }
-    newline(pretty_print, out, 0);
-    let _ = write!(out, "}}");
-
-    newline(pretty_print, out, 0);
-
-    for p in params {
-        let var_type = match p.ty {
-            ParamTy::ReadOnly => "var<storage, read>",
-            ParamTy::ReadWrite => "var<storage, read_write>",
-            ParamTy::Uniform => "var<uniform>",
-        };
-
-        newline(pretty_print, out, 0);
-
-        let pid = p.pid;
-
-        if p.ty == ParamTy::Uniform && p.dtype == SimpleDType::U32 {
-            let _ = write!(
-                out,
-                "@group(0) @binding({pid}) {var_type} param{pid}: Meta;"
-            );
-        } else {
-            let _ = write!(
-                out,
-                "@group(0) @binding({pid}) {var_type} param{pid}: array<{}>;",
-                get_simple_dtype(p.dtype)?,
-            );
-        }
-    }
-
-    newline(pretty_print, out, 0);
-
-    for (i, s) in kernel.shared.iter().enumerate() {
-        newline(pretty_print, out, 0);
-        let _ = write!(
-            out,
-            "var<workgroup> shared{i}: array<{}, ({})>;",
-            get_simple_dtype(s.dtype)?,
-            s.size
-        );
-    }
-
-    Ok(())
-}
-
-#[inline]
-fn emit_entry(kernel: &RawKernel, out: &mut String, pretty_print: bool) -> Result<(), Error> {
-    newline(pretty_print, out, 0);
-    let _ = write!(
-        out,
-        "@compute @workgroup_size({}, ({}), ({})) ",
-        kernel.block[0], kernel.block[1], kernel.block[2]
-    );
-
-    newline(pretty_print, out, 0);
-    let _ = write!(out, "fn main(");
-
-    newline(pretty_print, out, 1);
-    let _ = write!(out, "@builtin(local_invocation_id) lid: vec3<u32>,");
-
-    newline(pretty_print, out, 1);
-    let _ = write!(out, "@builtin(workgroup_id) bid: vec3<u32>,");
-
-    newline(pretty_print, out, 1);
-    let _ = write!(out, "@builtin(global_invocation_id) gid: vec3<u32>,");
-
-    newline(pretty_print, out, 0);
-    let _ = write!(out, ") {{");
-
-    emit_ops(kernel, out, pretty_print)?;
-    newline(pretty_print, out, 0);
-
-    let _ = write!(out, "}}");
-
-    Ok(())
-}
-
-#[inline]
-fn emit_ops(kernel: &RawKernel, out: &mut String, pretty_print: bool) -> Result<(), Error> {
-    let mut nesting = 0;
-
-    for op in &kernel.ops {
-        if let Op::DefineVar { id } = op
-            && matches!(
-                kernel.values[*id].state,
-                ValueState::Inline | ValueState::Masked
-            )
-        {
-            continue;
-        }
-
-        newline(pretty_print, out, nesting);
-
-        if *op != Op::EndScope {
-            tab(pretty_print, out);
-        }
-
-        process_op(out, op, &mut nesting, kernel)?;
-    }
-
-    Ok(())
-}
-
-fn process_op(
-    out: &mut String,
-    op: &Op,
-    nesting: &mut usize,
-    kernel: &RawKernel,
-) -> Result<(), Error> {
-    match op {
-        Op::Nop => {}
-
-        Op::DefineVar { id } => {
-            let val = &kernel.values[*id];
-            match val.state {
-                ValueState::Masked | ValueState::Inline => {}
-                ValueState::Const => {
-                    let _ = write!(out, "const v{id}: {}", get_dtype(val.dtype)?);
-
-                    if let Some(op) = &val.init {
-                        let _ = out.write_str(" = ");
-                        process_op(out, op, nesting, kernel)?;
-                    }
-
-                    let _ = out.write_char(';');
-                }
-                var => {
-                    if var == ValueState::Immut {
-                        let _ = write!(out, "let v{id}: {}", get_dtype(val.dtype)?);
-                    } else {
-                        let _ = write!(out, "var v{id}: {}", get_dtype(val.dtype)?);
-                    }
-
-                    if let Some(op) = &val.init {
-                        let _ = out.write_str(" = ");
-                        process_op(out, op, nesting, kernel)?;
-                    }
-
-                    let _ = out.write_char(';');
-                }
-            }
-        }
-
-        Op::OverwriteVar { id, val } => {
-            let _ = write!(out, "v{id} = {};", render_val(*val, kernel)?);
-        }
-
-        Op::AddAssign { id, val } => {
-            let _ = write!(out, "v{id} += {};", render_val(*val, kernel)?);
-        }
-
-        Op::MulAssign { id, val } => {
-            let _ = write!(out, "v{id} *= {};", render_val(*val, kernel)?);
-        }
-
-        Op::DivAssign { id, val } => {
-            let _ = write!(out, "v{id} /= {};", render_val(*val, kernel)?);
-        }
-
-        Op::SubAssign { id, val } => {
-            let _ = write!(out, "v{id} -= {};", render_val(*val, kernel)?);
-        }
-
-        Op::ShlAssign { id, val } => {
-            let _ = write!(out, "v{id} <<= {};", render_val(*val, kernel)?);
-        }
-
-        Op::ShrAssign { id, val } => {
-            let _ = write!(out, "v{id} >>= {};", render_val(*val, kernel)?);
-        }
-
-        Op::CopyVar { id } => {
-            let _ = out.write_str(&render_val(*id, kernel)?);
-        }
-
-        Op::ConstF64 { value } => {
-            let _ = write!(out, "{value}d");
-        }
-
-        Op::ConstF32 { value } => {
-            let _ = write!(out, "{value}f");
-        }
-
-        Op::ConstF16 { value } => {
-            let _ = write!(out, "{value}h");
-        }
-
-        Op::ConstBf16 { value: _ } => {
-            return Err(Error {
-                msg: "cannot evaluate constant `bf16`",
-                kind: ErrorKind::InvalidDType,
-                ctx: (),
-            });
-        }
-
-        Op::ConstU32 { value } => {
-            let _ = write!(out, "{value}u");
-        }
-
-        Op::ConstI32 { value } => {
-            let _ = write!(out, "{value}");
-        }
-
-        Op::ReadMeta { param, field } => {
-            let _ = write!(out, "param{param}.f{field}");
-        }
-
-        Op::Eq { a, b } => {
-            let _ = write!(
-                out,
-                "({}) == ({})",
-                render_val(*a, kernel)?,
-                render_val(*b, kernel)?
-            );
-        }
-
-        Op::Ne { a, b } => {
-            let _ = write!(
-                out,
-                "({}) != ({})",
-                render_val(*a, kernel)?,
-                render_val(*b, kernel)?
-            );
-        }
-
-        Op::Lt { a, b } => {
-            let _ = write!(
-                out,
-                "({}) < ({})",
-                render_val(*a, kernel)?,
-                render_val(*b, kernel)?
-            );
-        }
-
-        Op::Gt { a, b } => {
-            let _ = write!(
-                out,
-                "({}) > ({})",
-                render_val(*a, kernel)?,
-                render_val(*b, kernel)?
-            );
-        }
-
-        Op::Le { a, b } => {
-            let _ = write!(
-                out,
-                "({}) <= ({})",
-                render_val(*a, kernel)?,
-                render_val(*b, kernel)?
-            );
-        }
-
-        Op::Ge { a, b } => {
-            let _ = write!(
-                out,
-                "({}) >= ({})",
-                render_val(*a, kernel)?,
-                render_val(*b, kernel)?
-            );
-        }
-
-        Op::LocalId { axis } => {
-            let _ = write!(out, "lid.{}", get_axis(*axis));
-        }
-
-        Op::BlockId { axis } => {
-            let _ = write!(out, "bid.{}", get_axis(*axis));
-        }
-
-        Op::GlobalId { axis } => {
-            let _ = write!(out, "gid.{}", get_axis(*axis));
-        }
-
-        Op::Add { a, b } => {
-            let _ = write!(
-                out,
-                "({}) + ({})",
-                render_val(*a, kernel)?,
-                render_val(*b, kernel)?
-            );
-        }
-
-        Op::Sub { a, b } => {
-            let _ = write!(
-                out,
-                "({}) - ({})",
-                render_val(*a, kernel)?,
-                render_val(*b, kernel)?
-            );
-        }
-
-        Op::Mul { a, b } => {
-            let _ = write!(
-                out,
-                "({}) * ({})",
-                render_val(*a, kernel)?,
-                render_val(*b, kernel)?
-            );
-        }
-
-        Op::Div { a, b } => {
-            let _ = write!(
-                out,
-                "({}) / ({})",
-                render_val(*a, kernel)?,
-                render_val(*b, kernel)?
-            );
-        }
-
-        Op::Mod { a, b } => {
-            let _ = write!(
-                out,
-                "({}) % ({})",
-                render_val(*a, kernel)?,
-                render_val(*b, kernel)?
-            );
-        }
-
-        Op::Pow { a, b } => {
-            let _ = write!(
-                out,
-                "pow({}, {})",
-                render_val(*a, kernel)?,
-                render_val(*b, kernel)?
-            );
-        }
-
-        Op::Shl { a, b } => {
-            let _ = write!(
-                out,
-                "({}) << ({})",
-                render_val(*a, kernel)?,
-                render_val(*b, kernel)?
-            );
-        }
-
-        Op::Shr { a, b } => {
-            let _ = write!(
-                out,
-                "({}) >> ({})",
-                render_val(*a, kernel)?,
-                render_val(*b, kernel)?
-            );
-        }
-
-        Op::Fma { a, b, c } => {
-            let _ = write!(
-                out,
-                "fma({}, {}, {})",
-                render_val(*a, kernel)?,
-                render_val(*b, kernel)?,
-                render_val(*c, kernel)?
-            );
-        }
-
-        Op::Max { a, b } => {
-            let _ = write!(
-                out,
-                "max({}, {})",
-                render_val(*a, kernel)?,
-                render_val(*b, kernel)?
-            );
-        }
-
-        Op::Min { a, b } => {
-            let _ = write!(
-                out,
-                "min({}, {})",
-                render_val(*a, kernel)?,
-                render_val(*b, kernel)?
-            );
-        }
-
-        Op::Select { cond, a, b } => {
-            let _ = write!(
-                out,
-                "select({}, {}, {})",
-                render_val(*cond, kernel)?,
-                render_val(*a, kernel)?,
-                render_val(*b, kernel)?
-            );
-        }
-
-        Op::Exp { x } => {
-            let _ = write!(out, "exp({})", render_val(*x, kernel)?);
-        }
-
-        Op::Abs { x } => {
-            let _ = write!(out, "abs({})", render_val(*x, kernel)?);
-        }
-
-        Op::Neg { x } => {
-            let _ = write!(out, "-({})", render_val(*x, kernel)?);
-        }
-
-        Op::Log { x } => {
-            let _ = write!(out, "log({})", render_val(*x, kernel)?);
-        }
-
-        Op::Tanh { x } => {
-            let _ = write!(out, "tanh({})", render_val(*x, kernel)?);
-        }
-
-        Op::Sqrt { x } => {
-            let _ = write!(out, "sqrt({})", render_val(*x, kernel)?);
-        }
-
-        Op::ParamLoad { param, index } => {
-            let _ = write!(out, "param{param}[{}]", render_val(*index, kernel)?);
-        }
-
-        Op::Not { cond } => {
-            let _ = write!(out, "!({})", render_val(*cond, kernel)?);
-        }
-
-        Op::CastF64 { id } => {
-            let _ = write!(out, "f64({})", render_val(*id, kernel)?);
-        }
-
-        Op::CastF32 { id } => {
-            let _ = write!(out, "f32({})", render_val(*id, kernel)?);
-        }
-
-        Op::CastF16 { id } => {
-            let _ = write!(out, "f16({})", render_val(*id, kernel)?);
-        }
-
-        Op::CastU32 { id } => {
-            let _ = write!(out, "u32({})", render_val(*id, kernel)?);
-        }
-
-        Op::CastI32 { id } => {
-            let _ = write!(out, "i32({})", render_val(*id, kernel)?);
-        }
-
-        Op::CastBF16 { .. } => {
-            return Err(Error {
-                msg: "bf16 not supported",
-                kind: ErrorKind::InvalidDType,
-                ctx: (),
-            });
-        }
-
-        Op::ParamStore {
-            param,
-            index,
-            value,
-        } => {
-            let _ = write!(
-                out,
-                "param{param}[{}] = {};",
-                render_val(*index, kernel)?,
-                render_val(*value, kernel)?
-            );
-        }
-
-        Op::ParamAccum {
-            param,
-            index,
-            value,
-        } => {
-            let _ = write!(
-                out,
-                "param{param}[{}] += {};",
-                render_val(*index, kernel)?,
-                render_val(*value, kernel)?
-            );
-        }
-
-        Op::ParamMul {
-            param,
-            index,
-            value,
-        } => {
-            let _ = write!(
-                out,
-                "param{param}[{}] *= {};",
-                render_val(*index, kernel)?,
-                render_val(*value, kernel)?
-            );
-        }
-
-        Op::ParamDiv {
-            param,
-            index,
-            value,
-        } => {
-            let _ = write!(
-                out,
-                "param{param}[{}] /= {};",
-                render_val(*index, kernel)?,
-                render_val(*value, kernel)?
-            );
-        }
-
-        Op::ParamSub {
-            param,
-            index,
-            value,
-        } => {
-            let _ = write!(
-                out,
-                "param{param}[{}] -= {};",
-                render_val(*index, kernel)?,
-                render_val(*value, kernel)?
-            );
-        }
-
-        Op::ParamShl {
-            param,
-            index,
-            value,
-        } => {
-            let _ = write!(
-                out,
-                "param{param}[{}] <<= {};",
-                render_val(*index, kernel)?,
-                render_val(*value, kernel)?
-            );
-        }
-
-        Op::ParamShr {
-            param,
-            index,
-            value,
-        } => {
-            let _ = write!(
-                out,
-                "param{param}[{}] >>= {};",
-                render_val(*index, kernel)?,
-                render_val(*value, kernel)?
-            );
-        }
-
-        Op::SharedLoad { mem, index } => {
-            let _ = write!(out, "shared{mem}[{}]", render_val(*index, kernel)?);
-        }
-
-        Op::SharedStore { mem, index, value } => {
-            let _ = write!(
-                out,
-                "shared{mem}[{}] = {};",
-                render_val(*index, kernel)?,
-                render_val(*value, kernel)?
-            );
-        }
-
-        Op::SharedAccum { mem, index, value } => {
-            let _ = write!(
-                out,
-                "shared{mem}[{}] += {};",
-                render_val(*index, kernel)?,
-                render_val(*value, kernel)?
-            );
-        }
-
-        Op::SharedMul { mem, index, value } => {
-            let _ = write!(
-                out,
-                "shared{mem}[{}] *= {};",
-                render_val(*index, kernel)?,
-                render_val(*value, kernel)?
-            );
-        }
-
-        Op::SharedDiv { mem, index, value } => {
-            let _ = write!(
-                out,
-                "shared{mem}[{}] /= {};",
-                render_val(*index, kernel)?,
-                render_val(*value, kernel)?
-            );
-        }
-
-        Op::SharedSub { mem, index, value } => {
-            let _ = write!(
-                out,
-                "shared{mem}[{}] -= {};",
-                render_val(*index, kernel)?,
-                render_val(*value, kernel)?
-            );
-        }
-
-        Op::SharedShl { mem, index, value } => {
-            let _ = write!(
-                out,
-                "shared{mem}[{}] <<= {};",
-                render_val(*index, kernel)?,
-                render_val(*value, kernel)?
-            );
-        }
-
-        Op::SharedShr { mem, index, value } => {
-            let _ = write!(
-                out,
-                "shared{mem}[{}] >>= {};",
-                render_val(*index, kernel)?,
-                render_val(*value, kernel)?
-            );
-        }
-
-        Op::ForLoopBegin { index, end, step } => {
-            let _ = write!(
-                out,
-                "for (; v{index} < {}; v{index} += {}) {{",
-                render_val(*end, kernel)?,
-                render_val(*step, kernel)?,
-            );
-            *nesting += 1;
-        }
-
-        Op::ForeverLoopBegin => {
-            let _ = write!(out, "loop {{");
-            *nesting += 1;
-        }
-
-        Op::IfBegin { cond } => {
-            let _ = write!(out, "if ({}) {{", render_val(*cond, kernel)?);
-            *nesting += 1;
-        }
-
-        Op::ElseBegin => {
-            let _ = write!(out, "else {{");
-            *nesting += 1;
-        }
-
-        Op::StartScope => {
-            let _ = write!(out, "{{");
-        }
-
-        Op::EndScope => {
-            let _ = write!(out, "}}");
-            *nesting -= 1;
-        }
-
-        Op::Barrier => {
-            let _ = write!(out, "workgroupBarrier();");
-        }
-
-        Op::Return => {
-            let _ = write!(out, "return;");
-        }
-
-        Op::Continue => {
-            let _ = write!(out, "continue;");
-        }
-
-        Op::Break => {
-            let _ = write!(out, "break;");
-        }
-
-        _ => {
-            return Err(Error {
-                msg: "MMA not supported",
-                kind: ErrorKind::UnsupportedFeature,
-                ctx: (),
-            });
-        }
-    }
-
-    Ok(())
-}
-
-fn render_val(id: ValueId, kernel: &RawKernel) -> Result<String, Error> {
-    let mut out = String::new();
-    let val = &kernel.values[id];
-    match val.state {
-        ValueState::Inline => {
-            if let Some(op) = &val.init {
-                process_op(&mut out, op, &mut 0, kernel)?;
-            }
-        }
-        ValueState::Masked => {}
-        _ => {
-            let _ = write!(out, "v{id}");
-        }
-    }
-    Ok(out)
 }

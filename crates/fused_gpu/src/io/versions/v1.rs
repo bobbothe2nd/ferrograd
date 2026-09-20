@@ -192,7 +192,12 @@ macro_rules! impl_load {
                         ctx: SerialTensorError::FailedFileIo,
                     })?;
 
-                tensors.push(ctx.$init(shape, &data));
+                tensors.push(ctx.$init(shape, &data)
+                    .map_err(|_| Error {
+                        msg: "unexpected EOF",
+                        kind: ErrorKind::SerializationError,
+                        ctx: SerialTensorError::FailedFileIo,
+                    })?);
             }
 
             Ok(tensors)
@@ -211,8 +216,6 @@ macro_rules! impl_load {
                 ctx: SerialTensorError::FailedFileIo,
             })?;
             let len = u8::from_le_bytes(len) as usize;
-
-            let mut prev_sync = None::<$crate::dispatch::SubmissionIndex<B>>;
 
             for tensor in tensors.iter_mut().take(len) {
                 let mut rank = [0; size_of::<$unsigned>()];
@@ -248,15 +251,17 @@ macro_rules! impl_load {
 
                 tensor.shape = shape;
 
-                if let Some(prev_sync) = prev_sync {
-                    prev_sync.sync();
-                }
-
-                prev_sync = Some(ctx.upload(tensor, &data, 0).map_err(|err| Error {
+                ctx.sync().map_err(|err| Error {
                     msg: err.msg,
                     kind: err.kind,
                     ctx: SerialTensorError::Unrelated,
-                })?);
+                })?;
+
+                ctx.upload(tensor, &data, 0).map_err(|err| Error {
+                    msg: err.msg,
+                    kind: err.kind,
+                    ctx: SerialTensorError::Unrelated,
+                })?;
 
                 file.seek_relative(4).map_err(|_| Error {
                     msg: "unexpected EOF",

@@ -147,7 +147,7 @@ bitflags::bitflags! {
     }
 }
 
-pub trait GpuBufferBackend: Debug {
+pub trait GpuBufferBackend {
     fn size(&self) -> u32;
 
     fn size_bytes(&self) -> u32;
@@ -158,29 +158,28 @@ pub trait GpuKernelBackend {
     fn block(&self) -> &[u32; 3];
 }
 
+/// Core GPU backend trait, defining a context which uses the GPU
 pub trait GpuBackend: Sized {
     type Buffer: GpuBufferBackend;
+    type MetaBuf;
     type Kernel: GpuKernelBackend;
     type Batcher<'a>;
     type BatchState;
-    type SubmissionIndex;
-    type ParamLayout;
     type Schedule;
-    type SyncSubmissions;
 
     /// The target-specific configuration for the compiler.
     fn target_spec(&self) -> TargetCompilationOptions;
 
     /// Allocates an uninitialized GPU buffer with the size `len` in bytes.
-    fn alloc(&self, len: usize) -> Self::Buffer;
+    fn alloc(&self, len: u32) -> Result<Self::Buffer, Error>;
 
     /// Allocates a slice of `u8` (to be reinterpreted as larger datatypes).
-    fn alloc_init(&self, data: &[u8]) -> Self::Buffer;
+    fn alloc_init(&self, data: &[u8]) -> Result<Self::Buffer, Error>;
 
     /// Allocates a slice of `u32` on the GPU.
     ///
     /// This allocation is often small and uniform.
-    fn alloc_meta(&self, data: &[u32]) -> Self::Buffer;
+    fn alloc_meta(&self, data: &[u32]) -> Result<Self::MetaBuf, Error>;
 
     /// Copies the content of a CPU buffer to a GPU buffer at offset `dst_off`.
     ///
@@ -192,14 +191,14 @@ pub trait GpuBackend: Sized {
         buffer: &Self::Buffer,
         data: &[u8],
         dst_off: u32,
-    ) -> Result<Self::SubmissionIndex, Error>;
+    ) -> Result<(), Error>;
 
     /// Copies the content of one buffer to another.
     ///
     /// # Errors
     ///
     /// Should return an [`ErrorKind::FailedBufferCopy`](`crate::errors::ErrorKind::FailedBufferCopy`).
-    fn pipe(&self, src: &Self::Buffer, dst: &Self::Buffer) -> Result<Self::SubmissionIndex, Error>;
+    fn pipe(&self, src: &Self::Buffer, dst: &Self::Buffer) -> Result<(), Error>;
 
     /// Copies the content of a GPU buffer to a CPU buffer.
     ///
@@ -233,35 +232,34 @@ pub trait GpuBackend: Sized {
         kernel: &Self::Kernel,
         wg: [u32; 3],
         bindings: &[&Self::Buffer],
-    );
+        meta: &Self::MetaBuf,
+    ) -> Result<(), Error>;
 
-    fn dispatch_schedule(&self, batcher: &mut Self::Batcher<'_>, schedule: &Self::Schedule);
+    fn dispatch_schedule(&self, batcher: &mut Self::Batcher<'_>, schedule: &Self::Schedule) -> Result<(), Error>;
 
-    fn sync(&self, submission_index: Self::SubmissionIndex);
+    fn sync(&self) -> Result<(), Error>;
 
-    fn prepare_batch(&self) -> Self::BatchState;
+    fn prepare_batch(&self) -> Result<Self::BatchState, Error>;
 
     fn start_batch<'a>(&self, state: &'a mut Self::BatchState) -> Self::Batcher<'a>;
 
-    fn encode(&self, state: Self::BatchState) -> Self::SyncSubmissions;
-
-    fn submit(&self, submission: Self::SyncSubmissions) -> Self::SubmissionIndex;
+    fn encode(&self, state: Self::BatchState) -> Result<(), Error> ;
 
     fn poll(&self) -> PollStatus;
 }
 
 /// Allocate a buffer on the GPU.
-pub fn gpu_alloc<B: GpuBackend>(context: &B, len: usize) -> GpuBuffer<B> {
-    GpuBuffer {
-        inner: context.alloc(len),
-    }
+pub fn gpu_alloc<B: GpuBackend>(context: &B, len: u32) -> Result<GpuBuffer<B>, Error> {
+    Ok(GpuBuffer {
+        inner: context.alloc(len)?,
+    })
 }
 
 /// Allocate a buffer on the GPU and copy CPU memory into it.
-pub fn gpu_alloc_init<T: Pod, B: GpuBackend>(context: &B, data: &[T]) -> GpuBuffer<B> {
-    GpuBuffer {
-        inner: context.alloc_init(slice_to_bytes(data)),
-    }
+pub fn gpu_alloc_init<T: Pod, B: GpuBackend>(context: &B, data: &[T]) -> Result<GpuBuffer<B>, Error> {
+    Ok(GpuBuffer {
+        inner: context.alloc_init(slice_to_bytes(data))?,
+    })
 }
 
 /// Generic GPU buffer for any backend.
@@ -295,38 +293,12 @@ pub struct KernelGroup<'a, B: GpuBackend = backend::GpuContext> {
     pub(crate) optim: B::Kernel,
 }
 
-/// Handle to a series of GPU submissions.
-#[must_use]
-pub struct SubmissionIndex<'a, B: GpuBackend = backend::GpuContext>(
-    B::SubmissionIndex,
-    &'a GpuContext<B>,
-);
-
-impl<B: GpuBackend> SubmissionIndex<'_, B> {
-    pub fn sync(self) {
-        self.1.inner.sync(self.0);
-    }
-}
-
-/// Handle to a series of unsubmitted GPU kernels.
-#[must_use]
-pub struct SyncSubmission<'a, B: GpuBackend = backend::GpuContext>(
-    B::SyncSubmissions,
-    &'a GpuContext<B>,
-);
-
-impl<'a, B: GpuBackend> SyncSubmission<'a, B> {
-    pub fn submit(self) -> SubmissionIndex<'a, B> {
-        SubmissionIndex(self.1.inner.submit(self.0), self.1)
-    }
-}
-
 #[must_use]
 pub struct BatchState<'a, B: GpuBackend = backend::GpuContext>(B::BatchState, &'a GpuContext<B>);
 
 impl<'a, B: GpuBackend> BatchState<'a, B> {
-    pub fn encode(self) -> SyncSubmission<'a, B> {
-        SyncSubmission(self.1.inner.encode(self.0), self.1)
+    pub fn encode(self) -> Result<(), Error> {
+        self.1.inner.encode(self.0)
     }
 }
 
@@ -340,11 +312,13 @@ pub struct Schedule<'a, B: GpuBackend = backend::GpuContext> {
 
 struct LossSchedule<'a, B: GpuBackend> {
     grid: [u32; 3],
-    bindings: [&'a B::Buffer; 5],
+    meta: &'a B::MetaBuf,
+    bindings: [&'a B::Buffer; 4],
     kernel: B::Kernel,
 }
 
 struct OptimSchedule<'a, B: GpuBackend> {
+    meta: &'a B::MetaBuf,
     bindings: Vec<&'a B::Buffer>,
     kernel: B::Kernel,
     state: &'a [B::Buffer],
@@ -502,10 +476,9 @@ impl<B: GpuBackend> GpuContext<B> {
         tensor: &S,
         dst: &[T],
         dst_off: u32,
-    ) -> Result<SubmissionIndex<'_, B>, Error> {
+    ) -> Result<(), Error> {
         self.inner
             .upload(tensor.as_buffer(), slice_to_bytes(dst), dst_off)
-            .map(|x| SubmissionIndex(x, self))
     }
 
     /// Copies the content of one buffer to another without mutating the source.
@@ -522,14 +495,17 @@ impl<B: GpuBackend> GpuContext<B> {
         &self,
         src: &S1,
         dst: &S2,
-    ) -> Result<SubmissionIndex<'_, B>, Error> {
+    ) -> Result<(), Error> {
         self.inner
             .pipe(src.as_buffer(), dst.as_buffer())
-            .map(|x| SubmissionIndex(x, self))
     }
 
-    pub fn prepare_batch(&self) -> BatchState<'_, B> {
-        BatchState(self.inner.prepare_batch(), self)
+    pub fn sync(&self) -> Result<(), Error> {
+        self.inner.sync()
+    }
+
+    pub fn prepare_batch(&self) -> Result<BatchState<'_, B>, Error> {
+        Ok(BatchState(self.inner.prepare_batch()?, self))
     }
 
     pub fn start_batch<'a>(&'a self, state: &'a mut BatchState<B>) -> Batcher<'a, B> {
@@ -542,7 +518,7 @@ impl<B: GpuBackend> GpuContext<B> {
         saved: &[SaveIndicator],
         meta: &[u32],
         state: &OptimState<N>,
-    ) -> AllocTensors<B> {
+    ) -> Result<AllocTensors<B>, Error> {
         let mut forward_saved = Vec::new();
         let mut grad_tensors = Vec::new();
         let mut state_tensors = Vec::new();
@@ -552,43 +528,43 @@ impl<B: GpuBackend> GpuContext<B> {
             let node_shape = &node.shape;
             let num_shape = build_dims(node_shape, meta);
 
-            let len = (num_shape.iter().product::<u32>() as usize) * node.dtype.size();
+            let len = num_shape.iter().product::<u32>() * node.dtype.size() as u32;
 
             if save.is_defined_in_forward() {
-                let buf = self.inner.alloc(len);
+                let buf = self.inner.alloc(len)?;
                 forward_saved.push(buf);
             }
 
             if save.is_defined_in_backward() {
-                let buf = self.inner.alloc(len);
+                let buf = self.inner.alloc(len)?;
                 grad_tensors.push(buf);
 
                 state_tensors.reserve(N);
 
                 for state_t in 0..N {
                     let len = match state.shapes[state_t] {
-                        StateDim::Const(value) => value as usize,
-                        StateDim::GradRelative(value) => len * (value as usize),
+                        StateDim::Const(value) => value,
+                        StateDim::GradRelative(value) => len * value,
                     };
-                    let buf = self.inner.alloc(len);
+                    let buf = self.inner.alloc(len)?;
 
                     state_tensors.push(buf);
                 }
             }
         }
 
-        let meta_buffer = self.inner.alloc_meta(meta);
+        let meta_buffer = self.inner.alloc_meta(meta)?;
 
         let node_shape = &graph.nodes[graph.nodes.len() - 1].shape;
         let node_dtype = &graph.nodes[graph.nodes.len() - 1].dtype;
         let shape = build_dims(node_shape, meta);
-        let len = shape.iter().product::<u32>() as usize * node_dtype.size();
+        let len = shape.iter().product::<u32>() * node_dtype.size() as u32;
 
-        let forward_out = self.inner.alloc(len);
-        let loss_t = self.inner.alloc(len);
-        let seed = self.inner.alloc(len);
+        let forward_out = self.inner.alloc(len)?;
+        let loss_t = self.inner.alloc(len)?;
+        let seed = self.inner.alloc(len)?;
 
-        AllocTensors {
+        Ok(AllocTensors {
             meta: meta_buffer,
             forward_saved,
             grad_tensors,
@@ -599,54 +575,38 @@ impl<B: GpuBackend> GpuContext<B> {
                 shape,
                 data: GpuBuffer { inner: loss_t },
             },
-        }
+        })
     }
 
-    pub fn new_tensor<const N: u32>(&self, shape: Vec<u32>) -> Tensor<B> {
-        let len = (shape.iter().product::<u32>() * const { N / 8 }) as usize;
-        let data = self.inner.alloc(len);
-        Tensor {
-            shape,
-            data: GpuBuffer { inner: data },
-        }
+    pub fn new_tensor<const N: u32>(&self, shape: Vec<u32>) -> Result<Tensor<B>, Error> {
+        let len = shape.iter().product::<u32>() * const { N / 8 };
+        let data = gpu_alloc(&self.inner, len)?;
+        Ok(Tensor { shape, data, })
     }
 
-    pub fn init_tensor_f64(&self, shape: Vec<u32>, data: &[f64]) -> Tensor<B> {
+    pub fn init_tensor_f64(&self, shape: Vec<u32>, data: &[f64]) -> Result<Tensor<B>, Error> {
         debug_assert_eq!(
             shape.iter().product::<u32>(),
             data.len() as u32,
             "shape product (left) and data length (right) mismatch"
         );
 
-        let data = gpu_alloc_init(&self.inner, data);
-        Tensor { shape, data }
+        let data = gpu_alloc_init(&self.inner, data)?;
+        Ok(Tensor { shape, data })
     }
 
-    pub fn init_tensor_f32(&self, shape: Vec<u32>, data: &[f32]) -> Tensor<B> {
+    pub fn init_tensor_f32(&self, shape: Vec<u32>, data: &[f32]) -> Result<Tensor<B>, Error> {
         debug_assert_eq!(
             shape.iter().product::<u32>(),
             data.len() as u32,
             "shape product (left) and data length (right) mismatch"
         );
 
-        let data = gpu_alloc_init(&self.inner, data);
-        Tensor { shape, data }
+        let data = gpu_alloc_init(&self.inner, data)?;
+        Ok(Tensor { shape, data })
     }
 
-    pub fn init_tensor_f16(&self, shape: Vec<u32>, data: &[half::f16]) -> Tensor<B> {
-        debug_assert_eq!(
-            shape.iter().product::<u32>(),
-            data.len() as u32,
-            "shape product (left) and data length (right) mismatch"
-        );
-
-        let data_u16 = data.reinterpret_cast();
-        let data = gpu_alloc_init(&self.inner, data_u16);
-
-        Tensor { shape, data }
-    }
-
-    pub fn init_tensor_bf16(&self, shape: Vec<u32>, data: &[half::bf16]) -> Tensor<B> {
+    pub fn init_tensor_f16(&self, shape: Vec<u32>, data: &[half::f16]) -> Result<Tensor<B>, Error> {
         debug_assert_eq!(
             shape.iter().product::<u32>(),
             data.len() as u32,
@@ -654,27 +614,40 @@ impl<B: GpuBackend> GpuContext<B> {
         );
 
         let data_u16 = data.reinterpret_cast();
-        let data = gpu_alloc_init(&self.inner, data_u16);
+        let data = gpu_alloc_init(&self.inner, data_u16)?;
 
-        Tensor { shape, data }
+        Ok(Tensor { shape, data })
+    }
+
+    pub fn init_tensor_bf16(&self, shape: Vec<u32>, data: &[half::bf16]) -> Result<Tensor<B>, Error> {
+        debug_assert_eq!(
+            shape.iter().product::<u32>(),
+            data.len() as u32,
+            "shape product (left) and data length (right) mismatch"
+        );
+
+        let data_u16 = data.reinterpret_cast();
+        let data = gpu_alloc_init(&self.inner, data_u16)?;
+
+        Ok(Tensor { shape, data })
     }
 
     /// Allocates an empty one-hot vector.
-    pub fn new_onehot(&self, classes: u32) -> Tensor<B> {
-        let data = gpu_alloc(&self.inner, classes as usize);
-        Tensor {
+    pub fn new_onehot(&self, classes: u32) -> Result<Tensor<B>, Error> {
+        let data = gpu_alloc(&self.inner, classes)?;
+        Ok(Tensor {
             data,
             shape: vec![classes],
-        }
+        })
     }
 
     /// Allocates a new one-hot vector with the defined classes.
-    pub fn new_onehot_init(&self, indices: &[u32]) -> Tensor<B> {
-        let data = gpu_alloc_init(&self.inner, indices);
-        Tensor {
+    pub fn new_onehot_init(&self, indices: &[u32]) -> Result<Tensor<B>, Error> {
+        let data = gpu_alloc_init(&self.inner, indices)?;
+        Ok(Tensor {
             data,
             shape: vec![indices.len() as u32],
-        }
+        })
     }
 
     pub fn schedule<'a, const N: usize>(
@@ -689,8 +662,6 @@ impl<B: GpuBackend> GpuContext<B> {
         B::Buffer: Sized,
     {
         let mut bindings = Vec::new();
-
-        bindings.push(&alloc_tensors.meta);
 
         alloc_tensors
             .forward_saved
@@ -725,30 +696,32 @@ impl<B: GpuBackend> GpuContext<B> {
         let grid = alloc_tensors.loss_t.calc_grid(*kernels.loss.block());
 
         let bindings = [
-            &alloc_tensors.meta,
             &alloc_tensors.loss_t.data.inner,
             &alloc_tensors.seed,
             &alloc_tensors.forward_out,
             &alloc_tensors.seed,
         ];
 
+        let meta = &alloc_tensors.meta;
+
         let loss = LossSchedule {
             grid,
+            meta,
             bindings,
             kernel: kernels.loss,
         };
 
         let mut bindings = vec![
-            &alloc_tensors.meta,
-            &alloc_tensors.meta,
-            &alloc_tensors.meta,
+            &alloc_tensors.seed,
+            &alloc_tensors.seed,
         ];
 
         for _ in 0..N {
-            bindings.push(&alloc_tensors.meta);
+            bindings.push(&alloc_tensors.seed);
         }
 
         let optim = OptimSchedule {
+            meta,
             bindings,
             kernel: kernels.optim,
             state,
@@ -785,28 +758,29 @@ impl<B: GpuBackend> GpuContext<B> {
 pub struct Batcher<'a, B: GpuBackend = backend::GpuContext>(B::Batcher<'a>, &'a GpuContext<B>);
 
 impl<B: GpuBackend> Batcher<'_, B> {
-    pub fn dispatch_forward(&mut self, schedule: &Schedule<'_, B>) {
+    pub fn dispatch_forward(&mut self, schedule: &Schedule<'_, B>) -> Result<(), Error> {
         self.1
             .inner
-            .dispatch_schedule(&mut self.0, &schedule.forward);
+            .dispatch_schedule(&mut self.0, &schedule.forward)
     }
 
-    pub fn dispatch_backward(&mut self, schedule: &Schedule<'_, B>) {
+    pub fn dispatch_backward(&mut self, schedule: &Schedule<'_, B>) -> Result<(), Error> {
         self.1
             .inner
-            .dispatch_schedule(&mut self.0, &schedule.backward);
+            .dispatch_schedule(&mut self.0, &schedule.backward)
     }
 
-    pub fn dispatch_loss<T: ToBuffer<B>>(&mut self, schedule: &mut Schedule<'_, B>, target: &T) {
+    pub fn dispatch_loss<T: ToBuffer<B>>(&mut self, schedule: &mut Schedule<'_, B>, target: &T) -> Result<(), Error> {
         let mut bindings = schedule.loss.bindings;
-        bindings[4] = target.as_buffer();
+        bindings[3] = target.as_buffer();
 
         self.1.inner.dispatch_kernel(
             &mut self.0,
             &schedule.loss.kernel,
             schedule.loss.grid,
             &bindings,
-        );
+            schedule.loss.meta,
+        )
     }
 
     pub fn dispatch_optim<const N: usize>(
@@ -815,27 +789,32 @@ impl<B: GpuBackend> Batcher<'_, B> {
         weight: &Tensor<B>,
         grad: usize,
         tensors: &AllocTensors<B>,
-    ) {
+    ) -> Result<(), Error> {
         let grid = weight.calc_grid(*schedule.optim.kernel.block());
 
         let mut bindings = schedule.optim.bindings.clone();
 
-        bindings[1] = weight.as_buffer();
-        bindings[2] = &tensors.grad_tensors[grad];
+        bindings[0] = weight.as_buffer();
+        bindings[1] = &tensors.grad_tensors[grad];
 
         for state_t in 0..N {
-            bindings[3 + state_t] = &schedule.optim.state[state_t];
+            bindings[2 + state_t] = &schedule.optim.state[state_t];
         }
 
         self.1
             .inner
-            .dispatch_kernel(&mut self.0, &schedule.optim.kernel, grid, &bindings);
+            .dispatch_kernel(
+                &mut self.0,
+                &schedule.optim.kernel,
+                grid,
+                &bindings,
+                schedule.optim.meta,
+            )
     }
 }
 
-#[derive(Debug)]
 pub struct AllocTensors<B: GpuBackend = backend::GpuContext> {
-    pub meta: B::Buffer,
+    pub meta: B::MetaBuf,
     pub forward_saved: Vec<B::Buffer>,
     pub grad_tensors: Vec<B::Buffer>,
     pub forward_out: B::Buffer,

@@ -25,8 +25,9 @@
 #![forbid(clippy::unwrap_used)]
 #![forbid(clippy::expect_used)]
 #![forbid(clippy::panic)]
+#![forbid(unconditional_recursion)]
 #![forbid(clippy::std_instead_of_core)]
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 
 pub mod dispatch;
 

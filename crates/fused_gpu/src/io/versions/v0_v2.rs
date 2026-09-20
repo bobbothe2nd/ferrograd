@@ -64,7 +64,7 @@ fn save_tensors<const U: usize, P: AsRef<Path>, F: Default + Pod + Clone, B: Gpu
 ) -> Result<(), Error<SerialTensorError>> {
     let mut file = BufWriter::new(File::create(path).map_err(|_| Error {
         msg: "file not found",
-        kind: ErrorKind::SerializationError,
+        kind: ErrorKind::FileNotFound,
         ctx: SerialTensorError::InvalidPath,
     })?);
 
@@ -182,7 +182,12 @@ macro_rules! impl_load {
                         ctx: SerialTensorError::FailedFileIo,
                     })?;
 
-                tensors.push(ctx.$init(shape, &data));
+                tensors.push(ctx.$init(shape, &data)
+                    .map_err(|_| Error {
+                        msg: "unexpected EOF",
+                        kind: ErrorKind::SerializationError,
+                        ctx: SerialTensorError::FailedFileIo,
+                    })?);
             }
 
             Ok(tensors)
@@ -201,8 +206,6 @@ macro_rules! impl_load {
                 ctx: SerialTensorError::FailedFileIo,
             })?;
             let len = u8::from_le_bytes(len) as usize;
-
-            let mut prev_sync = None::<$crate::dispatch::SubmissionIndex<B>>;
 
             for tensor in tensors.iter_mut().take(len) {
                 let mut rank = [0; size_of::<$unsigned>()];
@@ -238,15 +241,17 @@ macro_rules! impl_load {
 
                 tensor.shape = shape;
 
-                if let Some(prev_sync) = prev_sync {
-                    prev_sync.sync();
-                }
-
-                prev_sync = Some(ctx.upload(tensor, &data, 0).map_err(|err| Error {
+                ctx.sync().map_err(|err| Error {
                     msg: err.msg,
                     kind: err.kind,
                     ctx: SerialTensorError::Unrelated,
-                })?);
+                })?;
+
+                ctx.upload(tensor, &data, 0).map_err(|err| Error {
+                    msg: err.msg,
+                    kind: err.kind,
+                    ctx: SerialTensorError::Unrelated,
+                })?;
             }
 
             Ok(())
@@ -419,8 +424,8 @@ mod tests {
         let data2 = [f64::MIN, -1.0, f64::MAX, 42.5];
 
         let tensors = vec![
-            ctx.init_tensor_f64(shape1.to_vec(), &data1),
-            ctx.init_tensor_f64(shape2.to_vec(), &data2),
+            ctx.init_tensor_f64(shape1.to_vec(), &data1).unwrap(),
+            ctx.init_tensor_f64(shape2.to_vec(), &data2).unwrap(),
         ];
 
         let path = temp_path("v0_f64");
@@ -447,8 +452,8 @@ mod tests {
         let data2 = [f32::MIN, -1.0, f32::MAX, 42.5];
 
         let tensors = vec![
-            ctx.init_tensor_f32(shape1.to_vec(), &data1),
-            ctx.init_tensor_f32(shape2.to_vec(), &data2),
+            ctx.init_tensor_f32(shape1.to_vec(), &data1).unwrap(),
+            ctx.init_tensor_f32(shape2.to_vec(), &data2).unwrap(),
         ];
 
         let path = temp_path("v2_f32");
@@ -482,8 +487,8 @@ mod tests {
         let data2 = [f16::MIN, f16::from_f32(-1.0), f16::MAX, f16::from_f32(42.5)];
 
         let tensors = vec![
-            ctx.init_tensor_f16(shape1.to_vec(), &data1),
-            ctx.init_tensor_f16(shape2.to_vec(), &data2),
+            ctx.init_tensor_f16(shape1.to_vec(), &data1).unwrap(),
+            ctx.init_tensor_f16(shape2.to_vec(), &data2).unwrap(),
         ];
 
         let path = temp_path("v2_f16");
@@ -522,8 +527,8 @@ mod tests {
         ];
 
         let tensors = vec![
-            ctx.init_tensor_bf16(shape1.to_vec(), &data1),
-            ctx.init_tensor_bf16(shape2.to_vec(), &data2),
+            ctx.init_tensor_bf16(shape1.to_vec(), &data1).unwrap(),
+            ctx.init_tensor_bf16(shape2.to_vec(), &data2).unwrap(),
         ];
 
         let path = temp_path("v2_bf16");

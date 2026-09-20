@@ -3,16 +3,11 @@
 use briny::traits::Pod;
 use fused_gpu::{
     dispatch::{
-        AllocTensors, CompilationOptions, GpuBackend, GpuBufferBackend, GpuContext as InnerCtx,
-        GpuKernelBackend, PollStatus, TargetCompilationOptions,
-        backend::{
-            NodeId, NopGpuBuffer, NopGpuContext, NopGpuKernel, OptimState, Param,
+        GpuContext as InnerCtx, backend::{
+            NopGpuContext, NodeId,
             kernel::{Dependencies, RawKernel, Redirect, SaveIndicator},
         },
-    },
-    errors::Error,
-    io::{BpatHeader, SerialTensorError},
-    tensor::{Tensor, ToBuffer, bf16, f16},
+    }, errors::Error, io::{BpatHeader, SerialTensorError}, tensor::{Tensor, ToBuffer, bf16, f16},
 };
 use std::{
     marker::PhantomData,
@@ -24,7 +19,13 @@ use std::{
 use fused_gpu::dispatch::backend::wgsl;
 
 use crate::{
-    dispatch::{self, GpuKernelGroup, KernelGroup},
+    dispatch::{
+        GpuKernelGroup, KernelGroup, BatchState, Batcher,
+        AllocTensors, CompilationOptions, GpuBackend, GpuBufferBackend,
+        GpuKernelBackend, PollStatus, TargetCompilationOptions,
+        OptimState, Param,
+        
+    },
     graph::Graph,
 };
 
@@ -130,7 +131,7 @@ impl<B: GpuBackend> GpuContext<B> {
         saved: &SavedNodes,
         meta: &MetaBinding,
         state: &OptimState<N>,
-    ) -> AllocTensors<B> {
+    ) -> Result<AllocTensors<B>, Error> {
         self.0.alloc_tensors(&graph.0, &saved.0, &meta.0, state)
     }
 
@@ -141,15 +142,15 @@ impl<B: GpuBackend> GpuContext<B> {
     }
 
     #[inline]
-    pub fn prepare_batch(&self) -> dispatch::BatchState<'_, B> {
+    pub fn prepare_batch(&self) -> Result<BatchState<'_, B>, Error> {
         self.0.prepare_batch()
     }
 
     #[inline]
     pub fn start_batch<'a>(
         &'a self,
-        state: &'a mut dispatch::BatchState<'_, B>,
-    ) -> dispatch::Batcher<'a, B> {
+        state: &'a mut BatchState<'_, B>,
+    ) -> Batcher<'a, B> {
         self.0.start_batch(state)
     }
 
@@ -189,7 +190,7 @@ impl<B: GpuBackend> GpuContext<B> {
         tensor: &S,
         src: &[T],
         dst_off: u32,
-    ) -> Result<dispatch::SubmissionIndex<'_, B>, Error> {
+    ) -> Result<(), Error> {
         self.0.upload(tensor, src, dst_off)
     }
 
@@ -198,7 +199,7 @@ impl<B: GpuBackend> GpuContext<B> {
         &self,
         src: &S1,
         dst: &S2,
-    ) -> Result<dispatch::SubmissionIndex<'_, B>, Error> {
+    ) -> Result<(), Error> {
         self.0.pipe(src, dst)
     }
 
@@ -213,41 +214,42 @@ impl<B: GpuBackend> GpuContext<B> {
 
     #[inline]
     #[must_use]
-    pub fn init_tensor_bf16(&self, shape: Vec<u32>, data: &[bf16]) -> Tensor<B> {
+    pub fn init_tensor_bf16(&self, shape: Vec<u32>, data: &[bf16]) -> Result<Tensor<B>, Error> {
         self.0.init_tensor_bf16(shape, data)
     }
 
     #[inline]
     #[must_use]
-    pub fn init_tensor_f16(&self, shape: Vec<u32>, data: &[f16]) -> Tensor<B> {
+    pub fn init_tensor_f16(&self, shape: Vec<u32>, data: &[f16]) -> Result<Tensor<B>, Error> {
         self.0.init_tensor_f16(shape, data)
     }
 
     #[inline]
     #[must_use]
-    pub fn init_tensor_f32(&self, shape: Vec<u32>, data: &[f32]) -> Tensor<B> {
+    pub fn init_tensor_f32(&self, shape: Vec<u32>, data: &[f32]) -> Result<Tensor<B>, Error> {
         self.0.init_tensor_f32(shape, data)
     }
 
     #[inline]
     #[must_use]
-    pub fn init_tensor_f64(&self, shape: Vec<u32>, data: &[f64]) -> Tensor<B> {
+    pub fn init_tensor_f64(&self, shape: Vec<u32>, data: &[f64]) -> Result<Tensor<B>, Error> {
         self.0.init_tensor_f64(shape, data)
     }
 
     #[inline]
     #[must_use]
-    pub fn new_onehot(&self, classes: u32) -> Tensor<B> {
+    pub fn new_onehot(&self, classes: u32) -> Result<Tensor<B>, Error> {
         self.0.new_onehot(classes)
     }
 
     #[inline]
     #[must_use]
-    pub fn init_onehot(&self, indices: &[u32]) -> Tensor<B> {
+    pub fn init_onehot(&self, indices: &[u32]) -> Result<Tensor<B>, Error> {
         self.0.new_onehot_init(indices)
     }
 }
 
+#[non_exhaustive]
 #[derive(Debug)]
 pub enum Dynamic {
     None(NopGpuContext),
@@ -289,20 +291,11 @@ impl GpuBackend for Dynamic {
     type Batcher<'a> = DynBatcher<'a>;
     type Kernel = DynKernel;
     type Schedule = DynSchedule;
-    type SyncSubmissions = DynSyncSubmissions;
-    type SubmissionIndex = DynSubmissionIndex;
-    type ParamLayout = DynParamLayout;
+    type MetaBuf = DynMetaBuf;
 
     impl_op! {
         target_spec(&self,) -> TargetCompilationOptions
-        alloc(&self, len: usize) -> Self::Buffer
-        alloc_init(&self, init: &[u8]) -> Self::Buffer
-        alloc_meta(&self, data: &[u32]) -> Self::Buffer
-        prepare_batch(&self,) -> Self::BatchState
-        dispatch_schedule(&self, pass: &mut Self::Batcher<'_>, schedule: &Self::Schedule) -> ()
-        encode(&self, state: Self::BatchState) -> Self::SyncSubmissions
-        sync(&self, submission_index: Self::SubmissionIndex) -> ()
-        submit(&self, submission: Self::SyncSubmissions) -> Self::SubmissionIndex
+        sync(&self,) -> Result<(), Error>
         poll(&self,) -> PollStatus
     }
 
@@ -312,8 +305,8 @@ impl GpuBackend for Dynamic {
             buffer: &Self::Buffer,
             data: &[u8],
             dst_off: u32
-        ) -> Result<Self::SubmissionIndex, Error>
-        pipe(&self, src: &Self::Buffer, dst: &Self::Buffer) -> Result<Self::SubmissionIndex, Error>
+        ) -> Result<(), Error>
+        pipe(&self, src: &Self::Buffer, dst: &Self::Buffer) -> Result<(), Error>
         compile(
             &self,
             src: &RawKernel,
@@ -321,6 +314,12 @@ impl GpuBackend for Dynamic {
             options: &CompilationOptions
         ) -> Result<Self::Kernel, Error>
         download(&self, buffer: &Self::Buffer, data: &mut [u8]) -> Result<(), Error>
+        dispatch_schedule(&self, pass: &mut Self::Batcher<'_>, schedule: &Self::Schedule) -> Result<(), Error>
+        encode(&self, state: Self::BatchState) -> Result<(), Error>
+        alloc(&self, len: u32) -> Result<Self::Buffer, Error>
+        alloc_init(&self, init: &[u8]) -> Result<Self::Buffer, Error>
+        alloc_meta(&self, data: &[u32]) -> Result<Self::MetaBuf, Error>
+        prepare_batch(&self,) -> Result<Self::BatchState, Error>
     }
 
     fn start_batch<'a>(&self, state: &'a mut Self::BatchState) -> Self::Batcher<'a> {
@@ -337,18 +336,19 @@ impl GpuBackend for Dynamic {
         kernel: &Self::Kernel,
         wg: [u32; 3],
         bindings: &[&Self::Buffer],
-    ) {
+        meta: &Self::MetaBuf,
+    ) -> Result<(), Error> {
         match self {
             Self::None(ctx) => {
                 let bindings = bindings.iter().copied().map(Into::into).collect::<Vec<_>>();
 
-                ctx.dispatch_kernel(batcher.into(), kernel.into(), wg, &bindings)
+                ctx.dispatch_kernel(batcher.into(), kernel.into(), wg, &bindings, meta.into())
             }
             #[cfg(feature = "wgsl")]
             Self::Wgsl(ctx) => {
                 let bindings = bindings.iter().copied().map(Into::into).collect::<Vec<_>>();
 
-                ctx.dispatch_kernel(batcher.into(), kernel.into(), wg, &bindings)
+                ctx.dispatch_kernel(batcher.into(), kernel.into(), wg, &bindings, meta.into())
             }
         }
     }
@@ -490,17 +490,23 @@ macro_rules! impl_backend {
     };
 }
 
-impl_backend!(
-    #[derive(Debug)]
-    DynBuffer,
-    NopGpuBuffer,
-    GpuBuffer
-);
+impl_backend!(#[derive(Debug)] DynBuffer, (), Buffer);
 
 impl GpuBufferBackend for DynBuffer {
-    impl_op! {
-        size(&self,) -> u32
-        size_bytes(&self,) -> u32
+    fn size(&self) -> u32 {
+        match self {
+            Self::None(_) => 0,
+            #[cfg(feature = "wgsl")]
+            Self::Wgsl(ctx) => ctx.size() as u32,
+        }
+    }
+
+    fn size_bytes(&self) -> u32 {
+        match self {
+            Self::None(_) => 0,
+            #[cfg(feature = "wgsl")]
+            Self::Wgsl(ctx) => ctx.size_bytes() as u32,
+        }
     }
 }
 
@@ -514,12 +520,7 @@ impl ToBuffer<Dynamic> for DynBuffer {
     }
 }
 
-impl_backend!(
-    #[derive(Clone)]
-    DynKernel,
-    NopGpuKernel,
-    GpuKernel
-);
+impl_backend!(DynKernel, (), GpuKernel);
 
 impl GpuKernelBackend for DynKernel {
     impl_op! {
@@ -534,3 +535,4 @@ impl_backend!(DynParamLayout, (), PipelineLayout);
 impl_backend!(DynSubmissionIndex, (), SubmissionIndex);
 impl_backend!(DynSchedule, (), Schedule);
 impl_backend!(DynBatcher<'a>, (), ComputePass);
+impl_backend!(DynMetaBuf, (), Buffer);
