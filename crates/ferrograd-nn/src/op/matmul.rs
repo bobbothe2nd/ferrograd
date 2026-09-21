@@ -78,7 +78,7 @@ pub fn lower_matmul_recursive<'a>(
         let shape = &graph.nodes[node.inputs[1]].shape;
 
         a_node = NodeInput::Node(node_id);
-        b_node = NodeInput::Raw { param, shape };
+        b_node = NodeInput::Param { param, shape };
     } else if backwardness == Some(1) {
         let param = saved_params[node.inputs[0]].ok_or(Error {
             msg: "saved input parameter could not be materialized",
@@ -87,7 +87,7 @@ pub fn lower_matmul_recursive<'a>(
         })?;
         let shape = &graph.nodes[node.inputs[0]].shape;
 
-        a_node = NodeInput::Raw { param, shape };
+        a_node = NodeInput::Param { param, shape };
         b_node = NodeInput::Node(node_id);
     } else {
         a_node = NodeInput::Node(node.inputs[0]);
@@ -99,7 +99,7 @@ pub fn lower_matmul_recursive<'a>(
 
     let mut a_node_shape = match a_node {
         NodeInput::Node(node) => graph.nodes[node].shape.clone(),
-        NodeInput::Raw { param: _, shape } => shape.to_vec(),
+        NodeInput::Param { param: _, shape } => shape.to_vec(),
     };
 
     if transpose_a {
@@ -109,7 +109,7 @@ pub fn lower_matmul_recursive<'a>(
 
     let mut b_node_shape = match b_node {
         NodeInput::Node(node) => graph.nodes[node].shape.clone(),
-        NodeInput::Raw { param: _, shape } => shape.to_vec(),
+        NodeInput::Param { param: _, shape } => shape.to_vec(),
     };
 
     if transpose_b {

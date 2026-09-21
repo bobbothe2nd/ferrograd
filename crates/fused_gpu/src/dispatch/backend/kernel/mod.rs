@@ -185,7 +185,7 @@ pub struct KernelsRedirected<'a> {
 }
 
 impl<'a> KernelsChained<'a> {
-    pub(crate) fn lower(
+    pub fn lower(
         graph: &'a Graph<'a>,
         meta: Metadata,
         saved: &[SaveIndicator],
@@ -728,7 +728,7 @@ impl RawKernel {
 }
 
 pub enum NodeInput<'a> {
-    Raw { param: ParamId, shape: &'a [MetaId] },
+    Param { param: ParamId, shape: &'a [MetaId] },
 
     Node(NodeId),
 }

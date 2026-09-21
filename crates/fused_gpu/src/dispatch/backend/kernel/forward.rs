@@ -316,7 +316,7 @@ fn eval_node<'a>(
 ) -> Result<Vec<NodeId>, Error> {
     let node_id = match node_id {
         NodeInput::Node(node_id) => *node_id,
-        NodeInput::Raw { .. } => {
+        NodeInput::Param { .. } => {
             return Err(Error {
                 msg: "cannot evaluate raw node input during forward pass",
                 kind: ErrorKind::InvalidArgument,

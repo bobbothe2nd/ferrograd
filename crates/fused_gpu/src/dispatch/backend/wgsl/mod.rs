@@ -297,6 +297,8 @@ impl GpuBackend for GpuContext {
             entries: &entries,
         };
 
+        println!("{:?}\n", entries);
+
         let bind_group_layout = self.device.create_bind_group_layout(&desc);
         let bind_group_layouts = &[Some(&bind_group_layout)];
 
@@ -403,6 +405,8 @@ impl GpuBackend for GpuContext {
                         .for_each(|entry| kernel_bindings.push(entry));
 
                     let kernel = &kernel.kernel;
+
+                    println!("{:?}\n", kernel_bindings);
 
                     let bind_group = self.device.create_bind_group(&BindGroupDescriptor {
                         layout: &kernel.get_bind_group_layout(0),

@@ -371,6 +371,7 @@ impl<B: GpuBackend> GpuContext<B> {
                                 |(i, param)| if kernel.params[i] { Some(*param) } else { None },
                             )
                             .collect::<Vec<_>>();
+                        println!("{:?},{:?},", kernel.params, params.len());
 
                         Redirect::Unmasked((
                             self.inner.compile(&kernel.raw, &params, options)?,

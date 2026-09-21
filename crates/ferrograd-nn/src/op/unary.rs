@@ -152,7 +152,7 @@ macro_rules! lower_unary {
                         eval_node(
                             root,
                             input,
-                            &NodeInput::Raw {
+                            &NodeInput::Param {
                                 param: saved_params[node_id].ok_or(Error {
                                     msg: "could not materialize saved forward param",
                                     kind: ErrorKind::ParamNotMaterialized,

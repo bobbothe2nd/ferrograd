@@ -7,15 +7,13 @@ use crate::{
     },
     errors::{Error, ErrorKind},
 };
-use core::{fmt::Write, num::NonZeroU64, str::FromStr};
+use core::{fmt::Write, str::FromStr};
 use std::{string::String, vec::Vec};
 
 pub use wgpu::{BindGroupLayoutEntry, BindingType, BufferBindingType,ShaderStages,};
 
 #[inline]
 pub(super) fn generate_layout_desc(params: &[Param]) -> Vec<BindGroupLayoutEntry> {
-    const MIN_BIND_SIZE: NonZeroU64 = NonZeroU64::new(1024).unwrap();
-
     params
         .iter()
         .map(|x| {
@@ -33,7 +31,7 @@ pub(super) fn generate_layout_desc(params: &[Param]) -> Vec<BindGroupLayoutEntry
                     has_dynamic_offset: false,
                     min_binding_size: match ty {
                         BufferBindingType::Uniform => None,
-                        BufferBindingType::Storage { .. } => Some(MIN_BIND_SIZE),
+                        BufferBindingType::Storage { .. } => None,
                     },
                 },
                 count: None,

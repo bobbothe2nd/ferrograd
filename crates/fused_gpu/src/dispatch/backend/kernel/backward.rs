@@ -247,7 +247,7 @@ fn eval_grad<'a>(
 ) -> Result<Vec<NodeId>, Error> {
     let node_id = match node_id {
         NodeInput::Node(node_id) => *node_id,
-        NodeInput::Raw { param, shape: _ } => {
+        NodeInput::Param { param, shape: _ } => {
             kernel.raw.accum_var(
                 upstream,
                 Op::ParamLoad {
