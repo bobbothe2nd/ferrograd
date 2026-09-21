@@ -247,7 +247,7 @@ macro_rules! impl_load {
                     ctx: SerialTensorError::Unrelated,
                 })?;
 
-                ctx.upload(tensor, &data, 0).map_err(|err| Error {
+                ctx.upload(tensor, &data, 0, 0).map_err(|err| Error {
                     msg: err.msg,
                     kind: err.kind,
                     ctx: SerialTensorError::Unrelated,

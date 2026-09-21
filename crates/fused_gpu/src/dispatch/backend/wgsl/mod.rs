@@ -1,14 +1,10 @@
 use crate::{
     dispatch::{
-        CompilationOptions, DebugCompilationOptions, GpuBackend, GpuBufferBackend,
-        GpuKernelBackend, PollStatus, TargetCompilationOptions, TargetFlags,
-        backend::{
+        CompilationOptions, DebugCompilationOptions, GpuBackend, GpuBufferBackend, GpuKernelBackend, TargetCompilationOptions, TargetFlags, backend::{
             MetaId, NodeId, Param,
             kernel::{Dependencies, RawKernel, Redirect},
         },
-    },
-    errors::{Error, ErrorKind},
-    tensor::{ToBuffer, build_dims, calc_grid},
+    }, errors::{Error, ErrorKind}, tensor::{ToBuffer, build_dims, calc_grid},
 };
 use briny::raw::cast::cast_slice;
 use std::vec::Vec;
@@ -24,7 +20,7 @@ pub use wgpu::{
     InstanceFlags, Limits, MemoryBudgetThresholds, MemoryHints, NoopBackendOptions,
     PipelineCompilationOptions, PipelineLayout, PipelineLayoutDescriptor, PollType,
     PowerPreference, Queue, RequestAdapterError, RequestAdapterOptions, ShaderModuleDescriptor,
-    ShaderSource, ShaderStages, SubmissionIndex, Trace,
+    ShaderSource, ShaderStages, SubmissionIndex, Trace, PollStatus,
     util::{BufferInitDescriptor, DeviceExt},
 };
 
@@ -144,8 +140,6 @@ impl GpuBackend for GpuContext {
     type MetaBuf = Buffer;
     type Kernel = GpuKernel;
     type Schedule = Schedule;
-    type Batcher<'a> = ComputePass<'a>;
-    type BatchState = CommandEncoder;
 
     fn target_spec(&self) -> TargetCompilationOptions {
         TargetCompilationOptions {
@@ -191,6 +185,7 @@ impl GpuBackend for GpuContext {
         &self,
         buffer: &Self::Buffer,
         data: &[u8],
+        src_off: u32,
         dst_off: u32,
     ) -> Result<(), Error> {
         if buffer.size_bytes().saturating_sub(dst_off) as usize > data.len() {
@@ -209,14 +204,14 @@ impl GpuBackend for GpuContext {
             contents: data,
             usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC,
         });
-        encoder.copy_buffer_to_buffer(&src, 0, &buffer, dst_off as u64, Some(data.len() as u64));
+        encoder.copy_buffer_to_buffer(&src, src_off as u64, &buffer, dst_off as u64, Some(data.len() as u64));
 
         self.queue.submit(Some(encoder.finish()));
 
         Ok(())
     }
 
-    fn pipe(&self, src: &Self::Buffer, dst: &Self::Buffer) -> Result<(), Error> {
+    fn copy(&self, src: &Self::Buffer, dst: &Self::Buffer) -> Result<(), Error> {
         let src_size = src.size();
 
         if src_size != dst.size() {
@@ -346,6 +341,7 @@ impl GpuBackend for GpuContext {
         kernels: Vec<Dependencies<Redirect<(Self::Kernel, NodeId, &[bool])>>>,
         bindings: &[&Self::Buffer],
         meta: &[u32],
+        meta_buf: &Self::MetaBuf,
     ) -> Result<Self::Schedule, Error> {
         let mut resolved = Vec::new();
         let mut tmp_res = Vec::new();
@@ -382,13 +378,20 @@ impl GpuBackend for GpuContext {
                     let iter_space = build_dims(kernel.iteration_space(), meta);
                     let grid = calc_grid(&iter_space, *kernel.block());
 
-                    let kernel_bindings = bindings
+                    let mut kernel_bindings = Vec::with_capacity(1 + bindings.len());
+
+                    kernel_bindings.push(BindGroupEntry {
+                        binding: 0,
+                        resource: meta_buf.as_entire_binding(),
+                    });
+
+                    bindings
                         .iter()
                         .enumerate()
                         .filter_map(|(i, buf)| {
                             if params[i] {
                                 let entry = BindGroupEntry {
-                                    binding: i as u32,
+                                    binding: 1 + i as u32,
                                     resource: buf.as_entire_binding(),
                                 };
 
@@ -397,7 +400,7 @@ impl GpuBackend for GpuContext {
                                 None
                             }
                         })
-                        .collect::<Vec<_>>();
+                        .for_each(|entry| kernel_bindings.push(entry));
 
                     let kernel = &kernel.kernel;
 
@@ -419,27 +422,27 @@ impl GpuBackend for GpuContext {
         })
     }
 
-    fn prepare_batch(&self) -> Result<Self::BatchState, Error> {
-        Ok(self.device
+    fn dispatch_schedule(&self, schedule: &Self::Schedule) -> Result<(), Error> {
+        let mut encoder = self.device
             .create_command_encoder(&CommandEncoderDescriptor {
                 label: Some("encoder"),
-            }))
-    }
+            });
 
-    fn start_batch<'a>(&self, encoder: &'a mut Self::BatchState) -> Self::Batcher<'a> {
-        encoder.begin_compute_pass(&ComputePassDescriptor {
-            label: Some("pass"),
-            timestamp_writes: None,
-        })
-    }
+        {
+            let mut pass = encoder.begin_compute_pass(&ComputePassDescriptor {
+                label: Some("pass"),
+                timestamp_writes: None,
+            });
 
-    fn dispatch_schedule(&self, pass: &mut Self::Batcher<'_>, schedule: &Self::Schedule) -> Result<(), Error> {
-        for (kernel, wg, bind_group) in &schedule.kernels {
-            pass.set_pipeline(kernel);
-            pass.set_bind_group(0, bind_group, &[]);
+            for (kernel, wg, bind_group) in &schedule.kernels {
+                pass.set_pipeline(kernel);
+                pass.set_bind_group(0, bind_group, &[]);
 
-            pass.dispatch_workgroups(wg[0], wg[1], wg[2]);
+                pass.dispatch_workgroups(wg[0], wg[1], wg[2]);
+            }
         }
+
+        self.queue.submit([encoder.finish()]);
 
         Ok(())
     }
@@ -447,7 +450,6 @@ impl GpuBackend for GpuContext {
     #[inline]
     fn dispatch_kernel(
         &self,
-        pass: &mut Self::Batcher<'_>,
         kernel: &Self::Kernel,
         wg: [u32; 3],
         bindings: &[&Self::Buffer],
@@ -477,10 +479,24 @@ impl GpuBackend for GpuContext {
             label: Some("bind_group"),
         });
 
-        pass.set_pipeline(kernel);
-        pass.set_bind_group(0, &bind_group, &[]);
+        let mut encoder = self.device
+            .create_command_encoder(&CommandEncoderDescriptor {
+                label: Some("encoder"),
+            });
+    
+        {
+            let mut pass = encoder.begin_compute_pass(&ComputePassDescriptor {
+                label: Some("pass"),
+                timestamp_writes: None,
+            });
 
-        pass.dispatch_workgroups(wg[0], wg[1], wg[2]);
+            pass.set_pipeline(kernel);
+            pass.set_bind_group(0, &bind_group, &[]);
+
+            pass.dispatch_workgroups(wg[0], wg[1], wg[2]);
+        }
+
+        self.queue.submit([encoder.finish()]);
 
         Ok(())
     }
@@ -499,21 +515,22 @@ impl GpuBackend for GpuContext {
         Ok(())
     }
 
-    fn encode(&self, state: Self::BatchState) -> Result<(), Error> {
-        let cmd = state.finish();
-        self.queue.submit(Some(cmd));
-        Ok(())
-    }
-
-    #[inline]
-    fn poll(&self) -> PollStatus {
+    fn is_ready(&self) -> Result<bool, Error> {
         let res = self.device.poll(PollType::Poll);
 
         match res {
-            Err(_) => PollStatus::Failed,
-            Ok(wgpu::PollStatus::Poll) => PollStatus::Pending,
-            Ok(wgpu::PollStatus::WaitSucceeded) => PollStatus::Ready,
-            Ok(wgpu::PollStatus::QueueEmpty) => PollStatus::QueueEmpty,
+            Err(_) => Err(Error {
+                msg: "failed to poll device for completion",
+                kind: ErrorKind::PollFailed,
+                ctx: (),
+            }),
+            Ok(PollStatus::Poll) => Ok(false),
+            Ok(wgpu::PollStatus::WaitSucceeded) => Ok(true),
+            Ok(wgpu::PollStatus::QueueEmpty) => Err(Error {
+                msg: "queue empty on poll",
+                kind: ErrorKind::PollFailed,
+                ctx: (),
+            }),
         }
     }
 }

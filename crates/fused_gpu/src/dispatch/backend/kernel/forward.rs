@@ -408,9 +408,12 @@ fn eval_node<'a>(
                     kind: ErrorKind::ParamNotMaterialized,
                     ctx: (),
                 })?;
-                kernel
-                    .raw
-                    .overwrite_var(out, Op::ParamLoad { param, index });
+
+                if computes_gid {
+                    kernel
+                        .raw
+                        .overwrite_var(out, Op::ParamLoad { param, index });
+                }
 
                 kernel.register_param(param);
 

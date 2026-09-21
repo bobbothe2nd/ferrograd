@@ -586,7 +586,7 @@ pub fn matmul(graph: &mut Graph, a: NodeId, b: NodeId) -> NodeId {
             need_dims: true,
             stable_iter: false,
             auto_save: true,
-            computes_gid: false,
+            computes_gid: true,
             prefer_separate: false,
             save,
             valid_shape,

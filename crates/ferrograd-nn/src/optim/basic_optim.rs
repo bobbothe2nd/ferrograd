@@ -30,4 +30,6 @@ pub const STOCHASTIC_GRADIENT_DESCENT: OptimType = OptimType {
     },
 };
 
-pub const STOCHASTIC_GRADIENT_DESCENT_STATE: OptimState<0> = OptimState { shapes: [] };
+pub fn stochastic_gradient_descent_state() -> OptimState {
+    OptimState { shapes: Box::new([]) }
+}

@@ -1,53 +1,37 @@
 use ferrograd::{
     dispatch::{
-        CompilationOptions, DType, DebugCompilationOptions, Dynamic, GpuContext, Graph, Metadata,
-        OptCompilationOptions, Schedule, SyncSubmission,
-    },
-    nn::{MEAN_SQUARED_ERROR, Optim},
-    tensor::f16,
+        CompilationOptions, SimpleDType, DebugCompilationOptions, GpuContext, Graph, Metadata, OptCompilationOptions, Schedule,
+    }, nn::{MEAN_SQUARED_ERROR, Optim},
 };
 use gpu_telemetry::monitor::{GpuMonitor, telemetry::Telemetry};
 use std::time::{Duration, Instant};
 
-fn encode<'a>(
-    ctx: &'a GpuContext,
-    schedule: &'a Schedule,
-    iters: usize,
-) -> SyncSubmission<'a, Dynamic> {
-    let mut state = ctx.prepare_batch();
-
-    {
-        let mut pass = ctx.start_batch(&mut state);
-
-        for _ in 0..iters {
-            pass.dispatch_forward(schedule);
-
-            pass.dispatch_backward(schedule);
-        }
-    }
-
-    state.encode()
-}
-
 fn model_runtime(ctx: &GpuContext, schedule: &Schedule) {
     const ITERS: [usize; 6] = [50, 100, 250, 100, 10, 1];
 
+    let runtime_start = Instant::now();
+
     let mut prev_iters = ITERS[0];
-    let mut previous_encoded = encode(ctx, schedule, prev_iters);
+
+    for _ in 0..prev_iters {
+        ctx.dispatch_forward(schedule).unwrap();
+
+        ctx.dispatch_backward(schedule).unwrap();
+    }
 
     for iters in ITERS.into_iter().skip(1) {
         let sync_start = Instant::now();
         let runtime_start = Instant::now();
 
-        let submission = previous_encoded.submit();
-
         let runtime_elapsed = runtime_start.elapsed();
 
         println!("MODEL SUBMISSION LATENCY: {runtime_elapsed:?} elapsed");
 
-        previous_encoded = encode(ctx, schedule, iters);
+        for _ in 0..iters {
+            ctx.dispatch_forward(schedule).unwrap();
 
-        submission.sync();
+            ctx.dispatch_backward(schedule).unwrap();
+        }
 
         let sync_elapsed = sync_start.elapsed();
 
@@ -57,13 +41,10 @@ fn model_runtime(ctx: &GpuContext, schedule: &Schedule) {
     }
 
     let sync_start = Instant::now();
-    let runtime_start = Instant::now();
-
-    let submission = previous_encoded.submit();
 
     let runtime_elapsed = runtime_start.elapsed();
 
-    submission.sync();
+    ctx.sync().unwrap();
 
     let sync_elapsed = sync_start.elapsed();
 
@@ -77,11 +58,11 @@ fn main() {
     const K: u32 = 512;
     const H: u32 = 256;
 
-    const A_VAL: f16 = f16::from_f32_const(3.0);
-    const B_VAL: f16 = f16::from_f32_const(2.0);
-    const C_VAL: f16 = f16::from_f32_const(1.0);
-    const D_VAL: f16 = f16::from_f32_const(0.5);
-    const E_VAL: f16 = f16::from_f32_const(1.0);
+    const A_VAL: f32 = 3.0;
+    const B_VAL: f32 = 2.0;
+    const C_VAL: f32 = 1.0;
+    const D_VAL: f32 = 0.5;
+    const E_VAL: f32 = 1.0;
 
     let mut meta = Metadata::new();
     let m = meta.new_field();
@@ -89,24 +70,26 @@ fn main() {
     let k = meta.new_field();
     let h = meta.new_field();
 
-    let state = Optim::STOCHASTIC_GRADIENT_DESCENT.state;
+    let optim = Optim::sgd();
 
-    let mut graph = Graph::new(MEAN_SQUARED_ERROR, Optim::STOCHASTIC_GRADIENT_DESCENT.lower);
+    let mut graph = Graph::new(MEAN_SQUARED_ERROR, optim.lower);
 
     {
         let mut graph = graph.define_ops();
 
-        let a = graph.input(&[m, k], DType::F16);
-        let b = graph.input(&[k, n], DType::F16);
-        let c = graph.input(&[h, m], DType::F16);
-        let d = graph.input(&[n, h], DType::F16);
-        let e = graph.input(&[h, h], DType::F16);
+        let a = graph.input(&[m, k], SimpleDType::F32);
+        let b = graph.input(&[k, n], SimpleDType::F32);
+        let c = graph.input(&[h, m], SimpleDType::F32);
+        let d = graph.input(&[n, h], SimpleDType::F32);
+        let e = graph.input(&[h, h], SimpleDType::F32);
 
         let x = graph.matmul(a, b);
         let y = graph.matmul(c, x);
         let z = graph.matmul(y, d);
         graph.add(z, e);
     }
+
+    graph.topo_sort().unwrap();
 
     let saved = graph.compute_saved_nodes();
     graph.validate(meta).unwrap();
@@ -124,7 +107,7 @@ fn main() {
     assert!(meta.validate_meta(&meta_binding));
     let meta_binding = ctx.alloc_meta(&meta_binding);
 
-    let saved_tensors = ctx.alloc_tensors(&graph, &saved, meta_binding, &state);
+    let saved_tensors = ctx.alloc_tensors(&graph, &saved, meta_binding, &optim.state).unwrap();
 
     let ir = graph.lower(meta, &options, &saved).unwrap();
     let kernels = ctx.compile(&ir, &options).unwrap();
@@ -136,16 +119,14 @@ fn main() {
     let tensor_start = Instant::now();
 
     let in_tensors = [
-        ctx.init_tensor_f16([M, K].to_vec(), &[A_VAL; (M * K) as usize]),
-        ctx.init_tensor_f16([K, N].to_vec(), &[B_VAL; (K * N) as usize]),
-        ctx.init_tensor_f16([H, M].to_vec(), &[C_VAL; (H * M) as usize]),
-        ctx.init_tensor_f16([N, H].to_vec(), &[D_VAL; (N * H) as usize]),
-        ctx.init_tensor_f16([H, H].to_vec(), &[E_VAL; (H * H) as usize]),
+        ctx.init_tensor_f32([M, K].to_vec(), &[A_VAL; (M * K) as usize]).unwrap(),
+        ctx.init_tensor_f32([K, N].to_vec(), &[B_VAL; (K * N) as usize]).unwrap(),
+        ctx.init_tensor_f32([H, M].to_vec(), &[C_VAL; (H * M) as usize]).unwrap(),
+        ctx.init_tensor_f32([N, H].to_vec(), &[D_VAL; (N * H) as usize]).unwrap(),
+        ctx.init_tensor_f32([H, H].to_vec(), &[E_VAL; (H * H) as usize]).unwrap(),
     ];
 
-    ctx.upload(&saved_tensors.seed, &[1_f32; (H * H) as usize], 0)
-        .unwrap()
-        .sync();
+    ctx.upload(&saved_tensors.seed, &[1_f32; (H * H) as usize], 0, 0).unwrap();
 
     let tensor_elapsed = tensor_start.elapsed();
 
@@ -158,7 +139,7 @@ fn main() {
             &in_tensors,
             &saved_tensors,
             &[],
-            &state,
+            &optim.state,
         )
         .unwrap();
 

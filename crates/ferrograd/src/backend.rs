@@ -10,7 +10,6 @@ use fused_gpu::{
     }, errors::Error, io::{BpatHeader, SerialTensorError}, tensor::{Tensor, ToBuffer, bf16, f16},
 };
 use std::{
-    marker::PhantomData,
     ops::{Deref, DerefMut},
     path::Path,
 };
@@ -20,9 +19,8 @@ use fused_gpu::dispatch::backend::wgsl;
 
 use crate::{
     dispatch::{
-        GpuKernelGroup, KernelGroup, BatchState, Batcher,
-        AllocTensors, CompilationOptions, GpuBackend, GpuBufferBackend,
-        GpuKernelBackend, PollStatus, TargetCompilationOptions,
+        GpuKernelGroup, KernelGroup, AllocTensors, CompilationOptions,
+        GpuBackend, GpuBufferBackend, GpuKernelBackend, TargetCompilationOptions,
         OptimState, Param,
         
     },
@@ -125,12 +123,12 @@ impl<B: GpuBackend> GpuContext<B> {
 
     #[inline]
     #[must_use]
-    pub fn alloc_tensors<const N: usize>(
+    pub fn alloc_tensors(
         &self,
         graph: &Graph<'_>,
         saved: &SavedNodes,
         meta: &MetaBinding,
-        state: &OptimState<N>,
+        state: &OptimState,
     ) -> Result<AllocTensors<B>, Error> {
         self.0.alloc_tensors(&graph.0, &saved.0, &meta.0, state)
     }
@@ -142,29 +140,16 @@ impl<B: GpuBackend> GpuContext<B> {
     }
 
     #[inline]
-    pub fn prepare_batch(&self) -> Result<BatchState<'_, B>, Error> {
-        self.0.prepare_batch()
-    }
-
-    #[inline]
-    pub fn start_batch<'a>(
-        &'a self,
-        state: &'a mut BatchState<'_, B>,
-    ) -> Batcher<'a, B> {
-        self.0.start_batch(state)
-    }
-
-    #[inline]
-    pub fn schedule<'a, const N: usize>(
+    pub fn schedule<'a>(
         &self,
         kernels: GpuKernelGroup<B>,
         meta: &MetaBinding,
         in_tensors: &'a [Tensor<B>],
         alloc_tensors: &'a AllocTensors<B>,
         state: &'a [B::Buffer],
-        _optim: &OptimState<N>,
+        _optim: &OptimState,
     ) -> Result<Schedule<'a, B>, Error> {
-        Ok(Schedule(self.0.schedule::<N>(
+        Ok(Schedule(self.0.schedule(
             kernels,
             &meta.0,
             in_tensors,
@@ -179,6 +164,37 @@ impl<B: GpuBackend> GpuContext<B> {
         self.0.detect_target()
     }
 
+    pub fn sync(&self) -> Result<(), Error> {
+        self.0.sync()
+    }
+
+    pub fn dispatch_forward(&self, schedule: &Schedule<'_, B>) -> Result<(), Error> {
+        self.0.dispatch_forward(schedule)
+    }
+
+    pub fn dispatch_backward(&self, schedule: &Schedule<'_, B>) -> Result<(), Error> {
+        self.0.dispatch_backward(schedule)
+    }
+
+    pub fn dispatch_loss(&self, schedule: &mut Schedule<'_, B>, target: &Tensor<B>) -> Result<(), Error> {
+        self.0.dispatch_loss(schedule, target)
+    }
+
+    pub fn dispatch_optim(
+        &self,
+        schedule: &mut Schedule<'_, B>,
+        weight: &Tensor<B>,
+        grad: usize,
+        tensors: &AllocTensors<B>,
+    ) -> Result<(), Error> {
+        self.0.dispatch_optim(
+            schedule,
+            weight,
+            grad,
+            tensors,
+        )
+    }
+
     #[inline]
     pub fn download<T: Pod, S: ToBuffer<B>>(&self, tensor: &S, dst: &mut [T]) -> Result<(), Error> {
         self.0.download(tensor, dst)
@@ -189,18 +205,19 @@ impl<B: GpuBackend> GpuContext<B> {
         &self,
         tensor: &S,
         src: &[T],
+        src_off: u32,
         dst_off: u32,
     ) -> Result<(), Error> {
-        self.0.upload(tensor, src, dst_off)
+        self.0.upload(tensor, src, src_off, dst_off)
     }
 
     #[inline]
-    pub fn pipe<S1: ToBuffer<B>, S2: ToBuffer<B>>(
+    pub fn copy<S1: ToBuffer<B>, S2: ToBuffer<B>>(
         &self,
         src: &S1,
         dst: &S2,
     ) -> Result<(), Error> {
-        self.0.pipe(src, dst)
+        self.0.copy(src, dst)
     }
 
     #[inline]
@@ -287,26 +304,25 @@ macro_rules! impl_op {
 
 impl GpuBackend for Dynamic {
     type Buffer = DynBuffer;
-    type BatchState = DynBatchState;
-    type Batcher<'a> = DynBatcher<'a>;
     type Kernel = DynKernel;
     type Schedule = DynSchedule;
     type MetaBuf = DynMetaBuf;
 
     impl_op! {
         target_spec(&self,) -> TargetCompilationOptions
-        sync(&self,) -> Result<(), Error>
-        poll(&self,) -> PollStatus
     }
 
     impl_op! {
+        sync(&self,) -> Result<(), Error>
+        is_ready(&self,) -> Result<bool, Error>
         upload(
             &self,
             buffer: &Self::Buffer,
             data: &[u8],
+            src_off: u32,
             dst_off: u32
         ) -> Result<(), Error>
-        pipe(&self, src: &Self::Buffer, dst: &Self::Buffer) -> Result<(), Error>
+        copy(&self, src: &Self::Buffer, dst: &Self::Buffer) -> Result<(), Error>
         compile(
             &self,
             src: &RawKernel,
@@ -314,25 +330,14 @@ impl GpuBackend for Dynamic {
             options: &CompilationOptions
         ) -> Result<Self::Kernel, Error>
         download(&self, buffer: &Self::Buffer, data: &mut [u8]) -> Result<(), Error>
-        dispatch_schedule(&self, pass: &mut Self::Batcher<'_>, schedule: &Self::Schedule) -> Result<(), Error>
-        encode(&self, state: Self::BatchState) -> Result<(), Error>
+        dispatch_schedule(&self, schedule: &Self::Schedule) -> Result<(), Error>
         alloc(&self, len: u32) -> Result<Self::Buffer, Error>
         alloc_init(&self, init: &[u8]) -> Result<Self::Buffer, Error>
         alloc_meta(&self, data: &[u32]) -> Result<Self::MetaBuf, Error>
-        prepare_batch(&self,) -> Result<Self::BatchState, Error>
-    }
-
-    fn start_batch<'a>(&self, state: &'a mut Self::BatchState) -> Self::Batcher<'a> {
-        match self {
-            Self::None(_) => ().into(),
-            #[cfg(feature = "wgsl")]
-            Self::Wgsl(ctx) => ctx.start_batch(state.into()).into(),
-        }
     }
 
     fn dispatch_kernel(
         &self,
-        batcher: &mut Self::Batcher<'_>,
         kernel: &Self::Kernel,
         wg: [u32; 3],
         bindings: &[&Self::Buffer],
@@ -342,13 +347,13 @@ impl GpuBackend for Dynamic {
             Self::None(ctx) => {
                 let bindings = bindings.iter().copied().map(Into::into).collect::<Vec<_>>();
 
-                ctx.dispatch_kernel(batcher.into(), kernel.into(), wg, &bindings, meta.into())
+                ctx.dispatch_kernel(kernel.into(), wg, &bindings, meta.into())
             }
             #[cfg(feature = "wgsl")]
             Self::Wgsl(ctx) => {
                 let bindings = bindings.iter().copied().map(Into::into).collect::<Vec<_>>();
 
-                ctx.dispatch_kernel(batcher.into(), kernel.into(), wg, &bindings, meta.into())
+                ctx.dispatch_kernel(kernel.into(), wg, &bindings, meta.into())
             }
         }
     }
@@ -359,6 +364,7 @@ impl GpuBackend for Dynamic {
         kernels: Vec<Dependencies<Redirect<(Self::Kernel, NodeId, &[bool])>>>,
         bindings: &[&Self::Buffer],
         meta: &[u32],
+        meta_buf: &Self::MetaBuf,
     ) -> Result<Self::Schedule, Error> {
         Ok(match self {
             Self::None(ctx) => {
@@ -376,7 +382,7 @@ impl GpuBackend for Dynamic {
                     .collect::<Vec<_>>();
                 let bindings = bindings.iter().copied().map(Into::into).collect::<Vec<_>>();
 
-                ctx.schedule(kernels, &bindings, meta)?.into()
+                ctx.schedule(kernels, &bindings, meta, meta_buf.into())?.into()
             }
             #[cfg(feature = "wgsl")]
             Self::Wgsl(ctx) => {
@@ -394,7 +400,7 @@ impl GpuBackend for Dynamic {
                     .collect::<Vec<_>>();
                 let bindings = bindings.iter().cloned().map(Into::into).collect::<Vec<_>>();
 
-                ctx.schedule(kernels, &bindings, meta)?.into()
+                ctx.schedule(kernels, &bindings, meta, meta_buf.into())?.into()
             }
         })
     }
@@ -529,10 +535,6 @@ impl GpuKernelBackend for DynKernel {
     }
 }
 
-impl_backend!(DynBatchState, (), CommandEncoder);
-impl_backend!(DynSyncSubmissions, (), CommandBuffer);
-impl_backend!(DynParamLayout, (), PipelineLayout);
 impl_backend!(DynSubmissionIndex, (), SubmissionIndex);
 impl_backend!(DynSchedule, (), Schedule);
-impl_backend!(DynBatcher<'a>, (), ComputePass);
 impl_backend!(DynMetaBuf, (), Buffer);

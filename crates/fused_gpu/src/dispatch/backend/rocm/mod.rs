@@ -3,7 +3,7 @@
 use briny::raw::cast::cast_slice;
 use rocm_rt::{hip::{HipError, device::Device, memory::{Buffer, DevMapped}, module::{Func, LaunchConfig}, stream::Stream}, hiprtc::{HiprtcError, program::{CompileOptions, Hsaco}}, shared::GfxVersion};
 
-use crate::{dispatch::{CompilationOptions, GpuBackend, GpuBufferBackend, GpuKernelBackend, PollStatus, TargetCompilationOptions, TargetFlags, backend::{MetaId, NodeId, Param, kernel::{Dependencies, RawKernel, Redirect}, rocm::generate::generate_hip}}, errors::{Error, ErrorKind}};
+use crate::{dispatch::{CompilationOptions, GpuBackend, GpuBufferBackend, GpuKernelBackend, TargetCompilationOptions, TargetFlags, backend::{MetaId, NodeId, Param, kernel::{Dependencies, RawKernel, Redirect}, rocm::generate::generate_hip}}, errors::{Error, ErrorKind}};
 
 mod generate;
 
@@ -20,23 +20,24 @@ macro_rules! map_err {
 pub struct GpuContext {
     device: Device,
     arch: GfxVersion,
+    stream: Stream,
 }
 
 impl GpuContext {
     pub async fn new() -> Result<Self, Error> {
         let device = map_err!(Device::current(), "failed to get current device")?;
         let arch = map_err!(device.gfx_version(), "failed to get GFX version from device")?;
+        let stream = map_err!(Stream::create(), "failed to get GFX version from device")?;
 
         Ok(Self {
             device,
             arch,
+            stream,
         })
     }
 }
 
 impl GpuBackend for GpuContext {
-    type BatchState = Stream;
-    type Batcher<'a> = &'a Stream;
     type Buffer = Buffer;
     type MetaBuf = DevMapped;
     type Kernel = Kernel;
@@ -51,9 +52,7 @@ impl GpuBackend for GpuContext {
 
         let host_buf = map_err!(DevMapped::new(data), "failed to allocate host buffer")?;
 
-        map_err!(unsafe {
-            host_buf.copy_to_dev_unchecked(&buf, 0, 0, data.len())
-        }, "failed copying host to device")?;
+        map_err!(host_buf.copy_to_dev(&buf, 0, 0, data.len()), "failed copying host to device")?;
 
         Ok(buf)
     }
@@ -111,7 +110,6 @@ impl GpuBackend for GpuContext {
 
     fn dispatch_kernel(
         &self,
-        batcher: &mut Self::Batcher<'_>,
         kernel: &Self::Kernel,
         grid: [u32; 3],
         bindings: &[&Self::Buffer],
@@ -126,7 +124,7 @@ impl GpuBackend for GpuContext {
         }
 
         unsafe {
-            map_err!(batcher.launch(&kernel.func, &mut kernel_args, LaunchConfig {
+            map_err!(self.stream.launch(&kernel.func, &mut kernel_args, LaunchConfig {
                 grid,
                 block: kernel.block,
             }), "failed to launch kernel")?;
@@ -135,26 +133,8 @@ impl GpuBackend for GpuContext {
         Ok(())
     }
 
-    fn dispatch_schedule(&self, _batcher: &mut Self::Batcher<'_>, _schedule: &Self::Schedule) -> Result<(), Error> {
+    fn dispatch_schedule(&self, _schedule: &Self::Schedule) -> Result<(), Error> {
         Ok(())
-    }
-
-    fn encode(&self, _state: Self::BatchState) -> Result<(), Error> {
-        Err(Error {
-            msg: "using nop backend",
-            kind: ErrorKind::UnsupportedFeature,
-            ctx: (),
-        })
-    }
-
-    fn prepare_batch(&self) -> Result<Self::BatchState, Error> {
-        map_err!(self.device.set_default(), "failed to set default device")?;
-
-        map_err!(Stream::create(), "failed to create stream")
-    }
-
-    fn start_batch<'a>(&self, state: &'a mut Self::BatchState) -> Self::Batcher<'a> {
-        state
     }
 
     fn schedule(
@@ -162,6 +142,7 @@ impl GpuBackend for GpuContext {
         _kernels: Vec<Dependencies<Redirect<(Self::Kernel, NodeId, &[bool])>>>,
         _bindings: &[&Self::Buffer],
         _meta: &[u32],
+        _meta_buf: &Self::MetaBuf,
     ) -> Result<Self::Schedule, Error> {
         Err(Error {
             msg: "using nop backend",
@@ -170,11 +151,7 @@ impl GpuBackend for GpuContext {
         })
     }
 
-    fn poll(&self) -> PollStatus {
-        PollStatus::Failed
-    }
-
-    fn sync(&self) -> Result<(), Error> {
+    fn is_ready(&self) -> Result<bool, Error> {
         Err(Error {
             msg: "using nop backend",
             kind: ErrorKind::UnsupportedFeature,
@@ -182,10 +159,15 @@ impl GpuBackend for GpuContext {
         })
     }
 
+    fn sync(&self) -> Result<(), Error> {
+        map_err!(self.stream.sync(), "failed to synchronize stream")
+    }
+
     fn upload(
         &self,
         _buffer: &Self::Buffer,
         _data: &[u8],
+        _src_off: u32,
         _dst_off: u32,
     ) -> Result<(), Error> {
         Err(Error {
@@ -195,7 +177,7 @@ impl GpuBackend for GpuContext {
         })
     }
 
-    fn pipe(
+    fn copy(
         &self,
         _src: &Self::Buffer,
         _dst: &Self::Buffer,

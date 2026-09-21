@@ -73,13 +73,17 @@ impl<'a> Graph<'a> {
     }
 
     #[inline]
+    pub fn topo_sort(&mut self) -> Result<(), Error<GraphErrorContext<'a>>> {
+        self.0.topo_sort()
+    }
+
+    #[inline]
     pub fn lower(
         &'a mut self,
         meta: Metadata,
         options: &CompilationOptions,
         saved: &SavedNodes,
     ) -> Result<KernelGroup<'a>, Error<GraphErrorContext<'a>>> {
-        self.0.topo_sort()?;
         self.0.rebuild_outputs();
 
         self.0
@@ -97,7 +101,7 @@ impl<'a> Graph<'a> {
 }
 
 pub struct DefineOps<'a, 'b> {
-    graph: &'a mut Graph<'b>,
+    pub graph: &'a mut Graph<'b>,
 }
 
 impl DefineOps<'_, '_> {

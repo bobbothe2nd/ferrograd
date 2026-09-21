@@ -163,8 +163,6 @@ pub trait GpuBackend: Sized {
     type Buffer: GpuBufferBackend;
     type MetaBuf;
     type Kernel: GpuKernelBackend;
-    type Batcher<'a>;
-    type BatchState;
     type Schedule;
 
     /// The target-specific configuration for the compiler.
@@ -190,6 +188,7 @@ pub trait GpuBackend: Sized {
         &self,
         buffer: &Self::Buffer,
         data: &[u8],
+        src_off: u32,
         dst_off: u32,
     ) -> Result<(), Error>;
 
@@ -198,7 +197,7 @@ pub trait GpuBackend: Sized {
     /// # Errors
     ///
     /// Should return an [`ErrorKind::FailedBufferCopy`](`crate::errors::ErrorKind::FailedBufferCopy`).
-    fn pipe(&self, src: &Self::Buffer, dst: &Self::Buffer) -> Result<(), Error>;
+    fn copy(&self, src: &Self::Buffer, dst: &Self::Buffer) -> Result<(), Error>;
 
     /// Copies the content of a GPU buffer to a CPU buffer.
     ///
@@ -224,28 +223,22 @@ pub trait GpuBackend: Sized {
         kernels: Vec<Dependencies<Redirect<(Self::Kernel, NodeId, &[bool])>>>,
         bindings: &[&Self::Buffer],
         meta: &[u32],
+        meta_buf: &Self::MetaBuf,
     ) -> Result<Self::Schedule, Error>;
 
     fn dispatch_kernel(
         &self,
-        batcher: &mut Self::Batcher<'_>,
         kernel: &Self::Kernel,
         wg: [u32; 3],
         bindings: &[&Self::Buffer],
         meta: &Self::MetaBuf,
     ) -> Result<(), Error>;
 
-    fn dispatch_schedule(&self, batcher: &mut Self::Batcher<'_>, schedule: &Self::Schedule) -> Result<(), Error>;
+    fn dispatch_schedule(&self, schedule: &Self::Schedule) -> Result<(), Error>;
 
     fn sync(&self) -> Result<(), Error>;
 
-    fn prepare_batch(&self) -> Result<Self::BatchState, Error>;
-
-    fn start_batch<'a>(&self, state: &'a mut Self::BatchState) -> Self::Batcher<'a>;
-
-    fn encode(&self, state: Self::BatchState) -> Result<(), Error> ;
-
-    fn poll(&self) -> PollStatus;
+    fn is_ready(&self) -> Result<bool, Error>;
 }
 
 /// Allocate a buffer on the GPU.
@@ -291,15 +284,6 @@ pub struct KernelGroup<'a, B: GpuBackend = backend::GpuContext> {
     pub(crate) backward: Vec<Dependencies<Redirect<(B::Kernel, usize, &'a [bool])>>>,
     pub(crate) loss: B::Kernel,
     pub(crate) optim: B::Kernel,
-}
-
-#[must_use]
-pub struct BatchState<'a, B: GpuBackend = backend::GpuContext>(B::BatchState, &'a GpuContext<B>);
-
-impl<'a, B: GpuBackend> BatchState<'a, B> {
-    pub fn encode(self) -> Result<(), Error> {
-        self.1.inner.encode(self.0)
-    }
 }
 
 /// Schedule used to improve performance by caching critical launch information.
@@ -475,10 +459,11 @@ impl<B: GpuBackend> GpuContext<B> {
         &self,
         tensor: &S,
         dst: &[T],
+        src_off: u32,
         dst_off: u32,
     ) -> Result<(), Error> {
         self.inner
-            .upload(tensor.as_buffer(), slice_to_bytes(dst), dst_off)
+            .upload(tensor.as_buffer(), slice_to_bytes(dst), src_off, dst_off)
     }
 
     /// Copies the content of one buffer to another without mutating the source.
@@ -491,37 +476,31 @@ impl<B: GpuBackend> GpuContext<B> {
     /// Failure is platform-specific and backend-dependent. It might only return an error
     /// if buffer lengths are unequal, but its behavior should not be assumed. Errors
     /// must be handled properly in critical code.
-    pub fn pipe<S1: ToBuffer<B>, S2: ToBuffer<B>>(
+    pub fn copy<S1: ToBuffer<B>, S2: ToBuffer<B>>(
         &self,
         src: &S1,
         dst: &S2,
     ) -> Result<(), Error> {
         self.inner
-            .pipe(src.as_buffer(), dst.as_buffer())
+            .copy(src.as_buffer(), dst.as_buffer())
     }
 
     pub fn sync(&self) -> Result<(), Error> {
         self.inner.sync()
     }
 
-    pub fn prepare_batch(&self) -> Result<BatchState<'_, B>, Error> {
-        Ok(BatchState(self.inner.prepare_batch()?, self))
-    }
-
-    pub fn start_batch<'a>(&'a self, state: &'a mut BatchState<B>) -> Batcher<'a, B> {
-        Batcher(self.inner.start_batch(&mut state.0), self)
-    }
-
-    pub fn alloc_tensors<const N: usize>(
+    pub fn alloc_tensors(
         &self,
         graph: &Graph<'_>,
         saved: &[SaveIndicator],
         meta: &[u32],
-        state: &OptimState<N>,
+        state: &OptimState,
     ) -> Result<AllocTensors<B>, Error> {
         let mut forward_saved = Vec::new();
         let mut grad_tensors = Vec::new();
         let mut state_tensors = Vec::new();
+
+        let total_grads = state.shapes.len();
 
         for (idx, save) in saved.iter().enumerate() {
             let node = &graph.nodes[idx];
@@ -539,9 +518,9 @@ impl<B: GpuBackend> GpuContext<B> {
                 let buf = self.inner.alloc(len)?;
                 grad_tensors.push(buf);
 
-                state_tensors.reserve(N);
+                state_tensors.reserve(total_grads);
 
-                for state_t in 0..N {
+                for state_t in 0..total_grads {
                     let len = match state.shapes[state_t] {
                         StateDim::Const(value) => value,
                         StateDim::GradRelative(value) => len * value,
@@ -650,7 +629,7 @@ impl<B: GpuBackend> GpuContext<B> {
         })
     }
 
-    pub fn schedule<'a, const N: usize>(
+    pub fn schedule<'a>(
         &self,
         kernels: KernelGroup<B>,
         meta: &[u32],
@@ -673,7 +652,7 @@ impl<B: GpuBackend> GpuContext<B> {
 
         bindings.push(&alloc_tensors.forward_out);
 
-        let forward = self.inner.schedule(kernels.forward, &bindings, meta)?;
+        let forward = self.inner.schedule(kernels.forward, &bindings, meta, &alloc_tensors.meta)?;
 
         bindings.truncate(1);
 
@@ -691,7 +670,7 @@ impl<B: GpuBackend> GpuContext<B> {
             .iter()
             .for_each(|t| bindings.push(t));
 
-        let backward = self.inner.schedule(kernels.backward, &bindings, meta)?;
+        let backward = self.inner.schedule(kernels.backward, &bindings, meta, &alloc_tensors.meta)?;
 
         let grid = alloc_tensors.loss_t.calc_grid(*kernels.loss.block());
 
@@ -716,7 +695,7 @@ impl<B: GpuBackend> GpuContext<B> {
             &alloc_tensors.seed,
         ];
 
-        for _ in 0..N {
+        for _ in 0..state.len() {
             bindings.push(&alloc_tensors.seed);
         }
 
@@ -735,6 +714,52 @@ impl<B: GpuBackend> GpuContext<B> {
         })
     }
 
+    pub fn dispatch_forward(&self, schedule: &Schedule<'_, B>) -> Result<(), Error> {
+        self.inner.dispatch_schedule(&schedule.forward)
+    }
+
+    pub fn dispatch_backward(&self, schedule: &Schedule<'_, B>) -> Result<(), Error> {
+        self.inner.dispatch_schedule(&schedule.backward)
+    }
+
+    pub fn dispatch_loss<T: ToBuffer<B>>(&self, schedule: &mut Schedule<'_, B>, target: &T) -> Result<(), Error> {
+        let mut bindings = schedule.loss.bindings;
+        bindings[3] = target.as_buffer();
+
+        self.inner.dispatch_kernel(
+            &schedule.loss.kernel,
+            schedule.loss.grid,
+            &bindings,
+            schedule.loss.meta,
+        )
+    }
+
+    pub fn dispatch_optim(
+        &self,
+        schedule: &mut Schedule<'_, B>,
+        weight: &Tensor<B>,
+        grad: usize,
+        tensors: &AllocTensors<B>,
+    ) -> Result<(), Error> {
+        let grid = weight.calc_grid(*schedule.optim.kernel.block());
+
+        let mut bindings = schedule.optim.bindings.clone();
+
+        bindings[0] = weight.as_buffer();
+        bindings[1] = &tensors.grad_tensors[grad];
+
+        for state_t in 0..(bindings.len() - 2) {
+            bindings[2 + state_t] = &schedule.optim.state[state_t];
+        }
+
+        self.inner.dispatch_kernel(
+                &schedule.optim.kernel,
+                grid,
+                &bindings,
+                schedule.optim.meta,
+            )
+    }
+
     #[cfg(feature = "io")]
     pub fn save_tensors<P: AsRef<std::path::Path>>(
         &self,
@@ -751,65 +776,6 @@ impl<B: GpuBackend> GpuContext<B> {
         path: P,
     ) -> Result<Vec<Tensor<B>>, Error<crate::io::SerialTensorError>> {
         crate::io::load_tensors(path, self)
-    }
-}
-
-#[must_use]
-pub struct Batcher<'a, B: GpuBackend = backend::GpuContext>(B::Batcher<'a>, &'a GpuContext<B>);
-
-impl<B: GpuBackend> Batcher<'_, B> {
-    pub fn dispatch_forward(&mut self, schedule: &Schedule<'_, B>) -> Result<(), Error> {
-        self.1
-            .inner
-            .dispatch_schedule(&mut self.0, &schedule.forward)
-    }
-
-    pub fn dispatch_backward(&mut self, schedule: &Schedule<'_, B>) -> Result<(), Error> {
-        self.1
-            .inner
-            .dispatch_schedule(&mut self.0, &schedule.backward)
-    }
-
-    pub fn dispatch_loss<T: ToBuffer<B>>(&mut self, schedule: &mut Schedule<'_, B>, target: &T) -> Result<(), Error> {
-        let mut bindings = schedule.loss.bindings;
-        bindings[3] = target.as_buffer();
-
-        self.1.inner.dispatch_kernel(
-            &mut self.0,
-            &schedule.loss.kernel,
-            schedule.loss.grid,
-            &bindings,
-            schedule.loss.meta,
-        )
-    }
-
-    pub fn dispatch_optim<const N: usize>(
-        &mut self,
-        schedule: &mut Schedule<'_, B>,
-        weight: &Tensor<B>,
-        grad: usize,
-        tensors: &AllocTensors<B>,
-    ) -> Result<(), Error> {
-        let grid = weight.calc_grid(*schedule.optim.kernel.block());
-
-        let mut bindings = schedule.optim.bindings.clone();
-
-        bindings[0] = weight.as_buffer();
-        bindings[1] = &tensors.grad_tensors[grad];
-
-        for state_t in 0..N {
-            bindings[2 + state_t] = &schedule.optim.state[state_t];
-        }
-
-        self.1
-            .inner
-            .dispatch_kernel(
-                &mut self.0,
-                &schedule.optim.kernel,
-                grid,
-                &bindings,
-                schedule.optim.meta,
-            )
     }
 }
 

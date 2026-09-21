@@ -3,13 +3,10 @@ use std::{string::String, vec, vec::Vec};
 
 use crate::{
     dispatch::{
-        CompilationOptions, GpuBackend, GpuBufferBackend, GpuKernelBackend,
-        TargetCompilationOptions, TargetFlags,
-        backend::kernel::{
+        CompilationOptions, GpuBackend, GpuBufferBackend, GpuKernelBackend, TargetCompilationOptions, TargetFlags, backend::kernel::{
             Kernel, KernelGroup, KernelsChained, LinkedKernel, NodeInput, RawKernel, SaveIndicator,
         },
-    },
-    errors::{Error, ErrorKind, GraphErrorContext},
+    }, errors::{Error, ErrorKind, GraphErrorContext},
 };
 
 pub mod kernel;
@@ -73,8 +70,6 @@ impl GpuBackend for NopGpuContext {
     type MetaBuf = ();
     type Kernel = ();
     type Schedule = ();
-    type Batcher<'a> = ();
-    type BatchState = ();
 
     fn target_spec(&self) -> TargetCompilationOptions {
         TargetCompilationOptions {
@@ -129,7 +124,6 @@ impl GpuBackend for NopGpuContext {
 
     fn dispatch_kernel(
         &self,
-        _batcher: &mut Self::Batcher<'_>,
         _kernel: &Self::Kernel,
         _wg: [u32; 3],
         _bindings: &[&Self::Buffer],
@@ -142,37 +136,20 @@ impl GpuBackend for NopGpuContext {
         })
     }
 
-    fn dispatch_schedule(&self, _batcher: &mut Self::Batcher<'_>, _schedule: &Self::Schedule) -> Result<(), Error> {
+    fn dispatch_schedule(&self, _schedule: &Self::Schedule) -> Result<(), Error> {
         Err(Error {
             msg: "using nop backend",
             kind: ErrorKind::UnsupportedFeature,
             ctx: (),
         })
     }
-
-    fn encode(&self, _state: Self::BatchState) -> Result<(), Error> {
-        Err(Error {
-            msg: "using nop backend",
-            kind: ErrorKind::UnsupportedFeature,
-            ctx: (),
-        })
-    }
-
-    fn prepare_batch(&self) -> Result<Self::BatchState, Error> {
-        Err(Error {
-            msg: "using nop backend",
-            kind: ErrorKind::UnsupportedFeature,
-            ctx: (),
-        })
-    }
-
-    fn start_batch<'a>(&self, _state: &'a mut Self::BatchState) -> Self::Batcher<'a> {}
 
     fn schedule(
         &self,
         _kernels: Vec<kernel::Dependencies<kernel::Redirect<(Self::Kernel, NodeId, &[bool])>>>,
         _bindings: &[&Self::Buffer],
         _meta: &[u32],
+        _meta_buf: &Self::MetaBuf,
     ) -> Result<Self::Schedule, Error> {
         Err(Error {
             msg: "using nop backend",
@@ -181,8 +158,12 @@ impl GpuBackend for NopGpuContext {
         })
     }
 
-    fn poll(&self) -> super::PollStatus {
-        super::PollStatus::Failed
+    fn is_ready(&self) -> Result<bool, Error> {
+        Err(Error {
+            msg: "using nop backend",
+            kind: ErrorKind::UnsupportedFeature,
+            ctx: (),
+        })
     }
 
     fn sync(&self) -> Result<(), Error> {
@@ -197,6 +178,7 @@ impl GpuBackend for NopGpuContext {
         &self,
         _buffer: &Self::Buffer,
         _data: &[u8],
+        _src_off: u32,
         _dst_off: u32,
     ) -> Result<(), Error> {
         Err(Error {
@@ -206,7 +188,7 @@ impl GpuBackend for NopGpuContext {
         })
     }
 
-    fn pipe(
+    fn copy(
         &self,
         _src: &Self::Buffer,
         _dst: &Self::Buffer,
@@ -550,8 +532,8 @@ pub struct OptimType {
 }
 
 #[derive(Debug)]
-pub struct OptimState<const N: usize> {
-    pub shapes: [StateDim; N],
+pub struct OptimState {
+    pub shapes: Box<[StateDim]>,
 }
 
 #[derive(Debug, Clone, Copy, Hash)]
@@ -1044,7 +1026,7 @@ impl<'a> Graph<'a> {
     /// # Errors
     ///
     /// Fails if the graph is structurally broken (e.g. containing loops).
-    pub fn topo_sort<'b>(&'b mut self) -> Result<(), Error<GraphErrorContext<'a>>> {
+    pub fn topo_sort(&mut self) -> Result<(), Error<GraphErrorContext<'a>>> {
         let n = self.nodes.len();
 
         let mut in_degree = vec![0usize; n];
@@ -1145,13 +1127,14 @@ impl<'a> Graph<'a> {
     ///
     /// # Errors
     ///
-    /// This function will not panic, but it can stop many panics and bugs in:
+    /// This function will not panic, but it can stop many panics, bugs, and errors in:
     ///
     /// - [`Self::lower`]
     /// - [`GpuContext::compile`](`super::GpuContext::compile`)
-    /// - [`GpuContext::launch_forward`](`super::GpuContext::launch_forward`)
-    /// - [`GpuContext::launch_backward`](`super::GpuContext::launch_backward`)
-    /// - [`GpuContext::launch_loss`](`super::GpuContext::launch_loss`)
+    /// - [`Steamspatch_forward`](`super::Steamspatch_forward`)
+    /// - [`Steamspatch_backward`](`super::Steamspatch_backward`)
+    /// - [`Steamspatch_loss`](`super::Steamspatch_loss`)
+    /// - Probably a lot more
     ///
     /// It is recommended that you run this function on your graph at least in debug mode, or
     /// you could have panics in production code.

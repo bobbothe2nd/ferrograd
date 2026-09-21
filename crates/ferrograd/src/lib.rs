@@ -9,7 +9,7 @@ pub mod dispatch {
     pub use fused_gpu::dispatch::{
         AllocTensors, CompilationOptions, DebugCompilationOptions, GpuBackend,
         GpuBuffer, GpuBufferBackend, GpuKernelBackend, OptCompilationOptions, OptFlags, PollStatus,
-        TargetCompilationOptions, BatchState, Batcher,
+        TargetCompilationOptions,
     };
 
     pub use fused_gpu::dispatch::backend::{
@@ -36,7 +36,7 @@ pub mod dispatch {
     };
 
     pub mod backend {
-        pub use crate::backend::{DynBatchState as BatchState, DynBatcher as Batcher, DynBuffer as Buffer, DynKernel as Kernel, DynSchedule as Schedule, Dynamic};
+        pub use crate::backend::{DynBuffer as Buffer, DynKernel as Kernel, DynSchedule as Schedule, Dynamic};
     }
 }
 
