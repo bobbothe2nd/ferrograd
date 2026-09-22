@@ -409,11 +409,9 @@ fn eval_node<'a>(
                     ctx: (),
                 })?;
 
-                if computes_gid {
-                    kernel
-                        .raw
-                        .overwrite_var(out, Op::ParamLoad { param, index });
-                }
+                kernel
+                    .raw
+                    .overwrite_var(out, Op::ParamLoad { param, index });
 
                 kernel.register_param(param);
 

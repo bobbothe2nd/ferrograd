@@ -7,14 +7,14 @@ pub use fused_gpu::tensor;
 
 pub mod dispatch {
     pub use fused_gpu::dispatch::{
-        AllocTensors, CompilationOptions, DebugCompilationOptions, GpuBackend,
-        GpuBuffer, GpuBufferBackend, GpuKernelBackend, OptCompilationOptions, OptFlags, PollStatus,
+        AllocTensors, CompilationOptions, DebugCompilationOptions, GpuBackend, GpuBuffer,
+        GpuBufferBackend, GpuKernelBackend, OptCompilationOptions, OptFlags, PollStatus,
         TargetCompilationOptions,
     };
 
     pub use fused_gpu::dispatch::backend::{
         Axis, DType, DispatchOptions, GraphOp, LossType, Metadata, Node, Op, OptimState, OptimType,
-        Param, ParamTy, SharedAlloc, StateDim, Value, ValueState, SimpleDType,
+        Param, ParamTy, SharedAlloc, SimpleDType, StateDim, Value, ValueState,
     };
 
     pub use fused_gpu::dispatch::backend::kernel::{
@@ -27,16 +27,15 @@ pub mod dispatch {
     pub use fused_gpu::errors::GraphErrorContext;
 
     pub use crate::{
-        backend::{
-            GpuContext, MetaBinding, SavedNodes,
-            Schedule,
-        },
+        backend::{GpuContext, MetaBinding, SavedNodes, Schedule},
         graph::{DefineOps, Graph},
         id::{EdgeId, MetaId, NodeId, ParamId, SharedId, ValueId},
     };
 
     pub mod backend {
-        pub use crate::backend::{DynBuffer as Buffer, DynKernel as Kernel, DynSchedule as Schedule, Dynamic};
+        pub use crate::backend::{
+            DynBuffer as Buffer, DynKernel as Kernel, DynSchedule as Schedule, Dynamic,
+        };
     }
 }
 

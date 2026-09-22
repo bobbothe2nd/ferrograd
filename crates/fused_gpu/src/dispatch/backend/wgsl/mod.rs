@@ -1,10 +1,14 @@
 use crate::{
     dispatch::{
-        CompilationOptions, DebugCompilationOptions, GpuBackend, GpuBufferBackend, GpuKernelBackend, TargetCompilationOptions, TargetFlags, backend::{
+        CompilationOptions, DebugCompilationOptions, GpuBackend, GpuBufferBackend,
+        GpuKernelBackend, TargetCompilationOptions, TargetFlags,
+        backend::{
             MetaId, NodeId, Param,
             kernel::{Dependencies, RawKernel, Redirect},
         },
-    }, errors::{Error, ErrorKind}, tensor::{ToBuffer, build_dims, calc_grid},
+    },
+    errors::{Error, ErrorKind},
+    tensor::{ToBuffer, build_dims, calc_grid},
 };
 use briny::raw::cast::cast_slice;
 use std::vec::Vec;
@@ -18,9 +22,9 @@ pub use wgpu::{
     Dx12UseFrameLatencyWaitableObject, ExperimentalFeatures, Features, ForceShaderModelToken,
     GlBackendOptions, GlDebugFns, GlFenceBehavior, Gles3MinorVersion, Instance, InstanceDescriptor,
     InstanceFlags, Limits, MemoryBudgetThresholds, MemoryHints, NoopBackendOptions,
-    PipelineCompilationOptions, PipelineLayout, PipelineLayoutDescriptor, PollType,
+    PipelineCompilationOptions, PipelineLayout, PipelineLayoutDescriptor, PollStatus, PollType,
     PowerPreference, Queue, RequestAdapterError, RequestAdapterOptions, ShaderModuleDescriptor,
-    ShaderSource, ShaderStages, SubmissionIndex, Trace, PollStatus,
+    ShaderSource, ShaderStages, SubmissionIndex, Trace,
     util::{BufferInitDescriptor, DeviceExt},
 };
 
@@ -34,8 +38,11 @@ pub struct GpuContext {
 }
 
 impl GpuContext {
-    /// Constructs a new context asynchronously.
-    pub async fn new() -> Result<Self, Error> {
+    pub fn new() -> Result<Self, Error> {
+        pollster::block_on(Self::new_nonblocking())
+    }
+
+    async fn new_nonblocking() -> Result<Self, Error> {
         let instance = Instance::new(InstanceDescriptor {
             backends: Backends::all(),
             flags: InstanceFlags::empty(),
@@ -83,7 +90,7 @@ impl GpuContext {
 
         let (device, queue) = match adapter
             .request_device(&DeviceDescriptor {
-                label: Some("device"),
+                label: None,
                 required_limits: adapter_limits,
                 required_features: Features::SHADER_F16,
                 experimental_features: ExperimentalFeatures::disabled(),
@@ -95,7 +102,7 @@ impl GpuContext {
             Ok(dev) => dev,
             Err(_) => adapter
                 .request_device(&DeviceDescriptor {
-                    label: Some("device"),
+                    label: None,
                     required_limits: Limits::defaults(),
                     required_features: Features::SHADER_F16,
                     experimental_features: ExperimentalFeatures::disabled(),
@@ -150,7 +157,7 @@ impl GpuBackend for GpuContext {
     #[inline]
     fn alloc(&self, len: u32) -> Result<Self::Buffer, Error> {
         Ok(self.device.create_buffer(&BufferDescriptor {
-            label: Some("gpu_tensor"),
+            label: None,
             size: len as u64,
             usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC | BufferUsages::COPY_DST,
             mapped_at_creation: false,
@@ -160,7 +167,7 @@ impl GpuBackend for GpuContext {
     #[inline]
     fn alloc_init(&self, contents: &[u8]) -> Result<Self::Buffer, Error> {
         Ok(self.device.create_buffer_init(&BufferInitDescriptor {
-            label: Some("gpu_tensor"),
+            label: None,
             contents,
             usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC | BufferUsages::COPY_DST,
         }))
@@ -174,7 +181,7 @@ impl GpuBackend for GpuContext {
         aligned[..data.len()].copy_from_slice(data);
 
         Ok(self.device.create_buffer_init(&BufferInitDescriptor {
-            label: Some("gpu_meta"),
+            label: None,
             contents: cast_slice(&aligned),
             usage: BufferUsages::UNIFORM,
         }))
@@ -200,11 +207,17 @@ impl GpuBackend for GpuContext {
             .device
             .create_command_encoder(&CommandEncoderDescriptor::default());
         let src = self.device.create_buffer_init(&BufferInitDescriptor {
-            label: Some("gpu_tensor"),
+            label: None,
             contents: data,
             usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC,
         });
-        encoder.copy_buffer_to_buffer(&src, src_off as u64, &buffer, dst_off as u64, Some(data.len() as u64));
+        encoder.copy_buffer_to_buffer(
+            &src,
+            src_off as u64,
+            buffer,
+            dst_off as u64,
+            Some(data.len() as u64),
+        );
 
         self.queue.submit(Some(encoder.finish()));
 
@@ -226,7 +239,7 @@ impl GpuBackend for GpuContext {
             .device
             .create_command_encoder(&CommandEncoderDescriptor::default());
 
-        encoder.copy_buffer_to_buffer(&src, 0, &dst, 0, src_size);
+        encoder.copy_buffer_to_buffer(src, 0, dst, 0, src_size);
 
         self.queue.submit(Some(encoder.finish()));
 
@@ -235,24 +248,16 @@ impl GpuBackend for GpuContext {
 
     #[inline]
     fn download(&self, buffer: &Self::Buffer, data: &mut [u8]) -> Result<(), Error> {
-        if buffer.size_bytes() as usize > data.len() {
-            return Err(Error {
-                msg: "insufficient CPU memory allocated for GPU download",
-                kind: ErrorKind::FailedBufferCopy,
-                ctx: (),
-            });
-        }
-
         let mut encoder = self
             .device
             .create_command_encoder(&CommandEncoderDescriptor::default());
         let dst = self.device.create_buffer(&BufferDescriptor {
-            label: Some("download"),
+            label: None,
             size: buffer.size(),
             usage: BufferUsages::MAP_READ | BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        encoder.copy_buffer_to_buffer(&buffer, 0, &dst, 0, buffer.size());
+        encoder.copy_buffer_to_buffer(buffer, 0, &dst, 0, buffer.size());
         let submission_index = self.queue.submit(Some(encoder.finish()));
         let buffer_slice = dst.slice(..);
 
@@ -293,17 +298,15 @@ impl GpuBackend for GpuContext {
     ) -> Result<Self::Kernel, Error> {
         let entries = generate::generate_layout_desc(params);
         let desc = BindGroupLayoutDescriptor {
-            label: Some("bind_group_layout"),
+            label: None,
             entries: &entries,
         };
-
-        println!("{:?}\n", entries);
 
         let bind_group_layout = self.device.create_bind_group_layout(&desc);
         let bind_group_layouts = &[Some(&bind_group_layout)];
 
         let desc = PipelineLayoutDescriptor {
-            label: Some("pipeline_layout"),
+            label: None,
             bind_group_layouts,
             immediate_size: 0,
         };
@@ -318,7 +321,7 @@ impl GpuBackend for GpuContext {
         )?;
 
         let shader = self.device.create_shader_module(ShaderModuleDescriptor {
-            label: Some("shader"),
+            label: None,
             source: ShaderSource::Wgsl(source.into()),
         });
 
@@ -326,7 +329,7 @@ impl GpuBackend for GpuContext {
             kernel: self
                 .device
                 .create_compute_pipeline(&ComputePipelineDescriptor {
-                    label: Some("pipeline"),
+                    label: None,
                     layout: Some(&pipeline_layout),
                     module: &shader,
                     entry_point: Some("main"),
@@ -391,9 +394,11 @@ impl GpuBackend for GpuContext {
                         .iter()
                         .enumerate()
                         .filter_map(|(i, buf)| {
-                            if params[i] {
+                            let index = 1 + i;
+
+                            if params[index] {
                                 let entry = BindGroupEntry {
-                                    binding: 1 + i as u32,
+                                    binding: index as u32,
                                     resource: buf.as_entire_binding(),
                                 };
 
@@ -406,12 +411,10 @@ impl GpuBackend for GpuContext {
 
                     let kernel = &kernel.kernel;
 
-                    println!("{:?}\n", kernel_bindings);
-
                     let bind_group = self.device.create_bind_group(&BindGroupDescriptor {
                         layout: &kernel.get_bind_group_layout(0),
                         entries: &kernel_bindings,
-                        label: Some("bind_group"),
+                        label: None,
                     });
 
                     scheduled_kernels.push((kernel.clone(), grid, bind_group));
@@ -427,14 +430,13 @@ impl GpuBackend for GpuContext {
     }
 
     fn dispatch_schedule(&self, schedule: &Self::Schedule) -> Result<(), Error> {
-        let mut encoder = self.device
-            .create_command_encoder(&CommandEncoderDescriptor {
-                label: Some("encoder"),
-            });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&CommandEncoderDescriptor { label: None });
 
         {
             let mut pass = encoder.begin_compute_pass(&ComputePassDescriptor {
-                label: Some("pass"),
+                label: None,
                 timestamp_writes: None,
             });
 
@@ -480,17 +482,16 @@ impl GpuBackend for GpuContext {
         let bind_group = self.device.create_bind_group(&BindGroupDescriptor {
             layout: &kernel.get_bind_group_layout(0),
             entries: &entries,
-            label: Some("bind_group"),
+            label: None,
         });
 
-        let mut encoder = self.device
-            .create_command_encoder(&CommandEncoderDescriptor {
-                label: Some("encoder"),
-            });
-    
+        let mut encoder = self
+            .device
+            .create_command_encoder(&CommandEncoderDescriptor { label: None });
+
         {
             let mut pass = encoder.begin_compute_pass(&ComputePassDescriptor {
-                label: Some("pass"),
+                label: None,
                 timestamp_writes: None,
             });
 
@@ -507,14 +508,16 @@ impl GpuBackend for GpuContext {
 
     #[inline]
     fn sync(&self) -> Result<(), Error> {
-        self.device.poll(PollType::Wait {
-            submission_index: None,
-            timeout: None,
-        }).map_err(|_| Error {
-            kind: ErrorKind::PollFailed,
-            msg: "failed to poll GPU for completion",
-            ctx: (),
-        })?;
+        self.device
+            .poll(PollType::Wait {
+                submission_index: None,
+                timeout: None,
+            })
+            .map_err(|_| Error {
+                kind: ErrorKind::PollFailed,
+                msg: "failed to poll GPU for completion",
+                ctx: (),
+            })?;
 
         Ok(())
     }

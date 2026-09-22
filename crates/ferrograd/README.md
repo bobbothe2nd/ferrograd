@@ -7,30 +7,29 @@ Advanced graph-based GPU compiler for linear algebra and AI/ML/DL.
 ```rust
 use ferrograd::{
     dispatch::{
-        CompilationOptions, DType, DebugCompilationOptions, GpuContext, Graph, Metadata,
+        CompilationOptions, SimpleDType, DebugCompilationOptions, GpuContext, Graph, Metadata,
         OptCompilationOptions,
     },
     io::BpatHeader,
     nn::{MEAN_SQUARED_ERROR, Optim},
-    tensor::f16,
 };
+use gpu_telemetry::monitor::{GpuMonitor, telemetry::Telemetry};
 use rand_core::{Rng, SeedableRng};
 use rand_xorshift::XorShiftRng;
-use std::{
-    array::from_fn,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
+
+const ITERS: usize = 16;
 
 const M: u32 = 768;
-const N: u32 = 1024;
+const N: u32 = 384;
 const K: u32 = 512;
 const H: u32 = 256;
 
-const A_VAL: f16 = f16::from_f32_const(0.03);
-const B_VAL: f16 = f16::from_f32_const(0.02);
-const C_VAL: f16 = f16::from_f32_const(0.01);
-const D_VAL: f16 = f16::from_f32_const(0.05);
-const E_VAL: f16 = f16::from_f32_const(1.0);
+const A_VAL: f32 = 0.03;
+const B_VAL: f32 = 0.02;
+const C_VAL: f32 = 0.01;
+const D_VAL: f32 = 0.05;
+const E_VAL: f32 = 1.0;
 
 let mut meta = Metadata::new();
 let m = meta.new_field();
@@ -38,18 +37,18 @@ let n = meta.new_field();
 let k = meta.new_field();
 let h = meta.new_field();
 
-let state = Optim::STOCHASTIC_GRADIENT_DESCENT.state;
+let optim = Optim::sgd();
 
-let mut graph = Graph::new(MEAN_SQUARED_ERROR, Optim::STOCHASTIC_GRADIENT_DESCENT.lower);
+let mut graph = Graph::new(MEAN_SQUARED_ERROR, optim.lower);
 
 {
     let mut graph = graph.define_ops();
 
-    let a = graph.input(&[m, k], DType::F16);
-    let b = graph.input(&[k, n], DType::F16);
-    let c = graph.input(&[h, m], DType::F16);
-    let d = graph.input(&[n, h], DType::F16);
-    let e = graph.input(&[h, h], DType::F16);
+    let a = graph.input(&[m, k], SimpleDType::F32);
+    let b = graph.input(&[k, n], SimpleDType::F32);
+    let c = graph.input(&[h, m], SimpleDType::F32);
+    let d = graph.input(&[n, h], SimpleDType::F32);
+    let e = graph.input(&[h, h], SimpleDType::F32);
 
     let x = graph.matmul(a, b);
     let y = graph.matmul(c, x);
@@ -69,36 +68,32 @@ let options = CompilationOptions {
     debug: DebugCompilationOptions::empty(),
 };
 
-let meta_binding = [1e-3_f32.to_bits(), M, N, K, H];
+let meta_binding = [1e-10_f32.to_bits(), M, N, K, H];
 assert!(meta.validate_meta(&meta_binding));
 let meta_binding = ctx.alloc_meta(&meta_binding);
 
-let saved_tensors = ctx.alloc_tensors(&graph, &saved, meta_binding, &state);
+let saved_tensors = ctx.alloc_tensors(&graph, &saved, meta_binding, &optim.state).unwrap();
 
 let ir = graph.lower(meta, &options, &saved).unwrap();
 let kernels = ctx.compile(&ir, &options).unwrap();
 
 let compile_elapsed = compile_start.elapsed();
 
-println!("COMPILE TIME: {compile_elapsed:?} elapsed");
-
 let tensor_start = Instant::now();
 
 let in_tensors = ctx
-    .load_tensors("data/v2bf16_test.bpat")
+    .load_tensors("data/v2f32_readme.bpat")
     .unwrap_or_else(|_| {
         vec![
-            ctx.init_tensor_f16([M, K].to_vec(), &[A_VAL; (M * K) as usize]),
-            ctx.init_tensor_f16([K, N].to_vec(), &[B_VAL; (K * N) as usize]),
-            ctx.init_tensor_f16([H, M].to_vec(), &[C_VAL; (H * M) as usize]),
-            ctx.init_tensor_f16([N, H].to_vec(), &[D_VAL; (N * H) as usize]),
-            ctx.init_tensor_f16([H, H].to_vec(), &[E_VAL; (H * H) as usize]),
+            ctx.init_tensor_f32([M, K].to_vec(), &[A_VAL; (M * K) as usize]).unwrap(),
+            ctx.init_tensor_f32([K, N].to_vec(), &[B_VAL; (K * N) as usize]).unwrap(),
+            ctx.init_tensor_f32([H, M].to_vec(), &[C_VAL; (H * M) as usize]).unwrap(),
+            ctx.init_tensor_f32([N, H].to_vec(), &[D_VAL; (N * H) as usize]).unwrap(),
+            ctx.init_tensor_f32([H, H].to_vec(), &[E_VAL; (H * H) as usize]).unwrap(),
         ]
     });
 
 let tensor_elapsed = tensor_start.elapsed();
-
-println!("TENSOR INIT TIME: {tensor_elapsed:?} elapsed\n");
 
 let mut schedule = ctx
     .schedule(
@@ -107,98 +102,61 @@ let mut schedule = ctx
         &in_tensors,
         &saved_tensors,
         &[],
-        &state,
+        &optim.state,
     )
     .unwrap();
 
 let mut epoch = 0;
 
-loop {
-    println!("EPOCH {epoch}:");
+let mut rng = XorShiftRng::seed_from_u64(0);
 
-    let target = {
-        let target = f16::from_f32(
-            2.0 * (rng.next_u32() as f32 / u32::MAX as f32) - 1.0
-        );
+let target = {
+    let target = 2.0 * (rng.next_u32() as f32 / u32::MAX as f32) - 1.0;
 
-        let arr = [target; (H * H) as usize];
+    let arr = [target; (H * H) as usize];
 
-        ctx.init_tensor_f16(vec![H, H], &arr)
-    };
+    ctx.init_tensor_f32(vec![H, H], &arr)
+}.unwrap();
 
-    let mut previous_encoded = {
-        let mut state = ctx.prepare_batch();
+let monitor: GpuMonitor<Telemetry> = GpuMonitor::start(Duration::from_millis(10)).unwrap();
 
-        {
-            let mut pass = ctx.start_batch(&mut state);
+for _ in 0..ITERS {
+    ctx.dispatch_forward(&schedule).unwrap();
+    ctx.dispatch_loss(&mut schedule, &target).unwrap();
+    ctx.dispatch_backward(&schedule).unwrap();
 
-            for _ in 0..16 {
-                pass.dispatch_forward(&schedule);
-                pass.dispatch_loss(&mut schedule, &target);
-                pass.dispatch_backward(&schedule);
+    ctx.dispatch_optim(&mut schedule, &in_tensors[0], 0, &saved_tensors).unwrap();
+    ctx.dispatch_optim(&mut schedule, &in_tensors[1], 1, &saved_tensors).unwrap();
+    ctx.dispatch_optim(&mut schedule, &in_tensors[2], 2, &saved_tensors).unwrap();
+    ctx.dispatch_optim(&mut schedule, &in_tensors[3], 3, &saved_tensors).unwrap();
+    ctx.dispatch_optim(&mut schedule, &in_tensors[4], 4, &saved_tensors).unwrap();
+}
 
-                pass.dispatch_optim::<0>(&mut schedule, &in_tensors[0], 0, &saved_tensors);
-                pass.dispatch_optim::<0>(&mut schedule, &in_tensors[1], 1, &saved_tensors);
-                pass.dispatch_optim::<0>(&mut schedule, &in_tensors[2], 2, &saved_tensors);
-                pass.dispatch_optim::<0>(&mut schedule, &in_tensors[3], 3, &saved_tensors);
-                pass.dispatch_optim::<0>(&mut schedule, &in_tensors[4], 4, &saved_tensors);
-            }
+ctx.sync().unwrap();
+
+let telemetry = monitor.stop().unwrap();
+
+let mut max_budget = 0;
+let mut accum_usage = 0;
+
+for sample in &telemetry.samples {
+    for heap in &sample.heaps {
+        if let Some(usage) = heap.usage {
+            accum_usage += usage;
         }
 
-        state.encode()
-    };
-
-    for _ in 0..3 {
-        let sync_start = Instant::now();
-
-        let submission = previous_encoded.submit();
-
-        previous_encoded = {
-            let mut state = ctx.prepare_batch();
-
-            {
-                let mut pass = ctx.start_batch(&mut state);
-
-                for _ in 0..16 {
-                    pass.dispatch_forward(&schedule);
-                    pass.dispatch_loss(&mut schedule, &target);
-                    pass.dispatch_backward(&schedule);
-
-                    pass.dispatch_optim::<0>(&mut schedule, &in_tensors[0], 0, &saved_tensors);
-                    pass.dispatch_optim::<0>(&mut schedule, &in_tensors[1], 1, &saved_tensors);
-                    pass.dispatch_optim::<0>(&mut schedule, &in_tensors[2], 2, &saved_tensors);
-                    pass.dispatch_optim::<0>(&mut schedule, &in_tensors[3], 3, &saved_tensors);
-                    pass.dispatch_optim::<0>(&mut schedule, &in_tensors[4], 4, &saved_tensors);
-                }
-            }
-
-            state.encode()
-        };
-
-        submission.sync();
-
-        let sync_elapsed = sync_start.elapsed();
-
-        println!("  SYNCHRONIZATION: {sync_elapsed:?} elapsed");
+        if let Some(budget) = heap.budget
+            && budget > max_budget
+        {
+            max_budget = budget;
+        }
     }
-
-    let sync_start = Instant::now();
-
-    let submission = previous_encoded.submit();
-
-    submission.sync();
-
-    let sync_elapsed = sync_start.elapsed();
-
-    println!("  SYNCHRONIZATION: {sync_elapsed:?} elapsed");
-
-    if epoch % 10 == 9 {
-        ctx.save_tensors("data/v2bf16_test.bpat", &in_tensors, BpatHeader::BpatV2bf16)
-            .unwrap();
-    }
-
-    epoch += 1;
 }
+
+let avg_usage = accum_usage / (telemetry.samples.len() as u64);
+
+ctx.save_tensors("data/v2f32_readme.bpat", &in_tensors, BpatHeader::BpatV2f32)
+    .unwrap();
 ```
 
 ## Custom Operations

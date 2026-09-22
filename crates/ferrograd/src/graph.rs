@@ -2,12 +2,15 @@ use std::ops::{Index, IndexMut};
 
 use crate::{
     backend::SavedNodes,
-    dispatch::{LossType, OptimType, CompilationOptions, Metadata, Node, SimpleDType, KernelGroup},
+    dispatch::{CompilationOptions, KernelGroup, LossType, Metadata, Node, OptimType, SimpleDType},
     id::{EdgeId, NodeId},
     tensor::{bf16, f16},
 };
 use briny::raw::alloc::cast_vec;
-use fused_gpu::{dispatch::backend::Graph as InnerGraph, errors::{Error, GraphErrorContext}};
+use fused_gpu::{
+    dispatch::backend::Graph as InnerGraph,
+    errors::{Error, GraphErrorContext},
+};
 
 pub struct Graph<'a>(pub(crate) InnerGraph<'a>);
 

@@ -1,7 +1,5 @@
 use std::{
-    fs::File,
-    io::{BufReader, BufWriter, Read, Write},
-    path::Path,
+    fs::{File, OpenOptions}, io::{BufReader, BufWriter, Read, Write}, path::Path,
 };
 
 use briny::{
@@ -45,7 +43,11 @@ fn save_tensors<const U: usize, P: AsRef<Path>, F: Default + Pod + Clone, B: Gpu
     tensors: &[Tensor<B>],
     magic: &[u8],
 ) -> Result<(), Error<SerialTensorError>> {
-    let mut file = BufWriter::new(File::create(path).map_err(|_| Error {
+    let file_res = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .open(path);
+    let mut file = BufWriter::new(file_res.map_err(|_| Error {
         msg: "file not found",
         kind: ErrorKind::SerializationError,
         ctx: SerialTensorError::InvalidPath,
@@ -192,12 +194,11 @@ macro_rules! impl_load {
                         ctx: SerialTensorError::FailedFileIo,
                     })?;
 
-                tensors.push(ctx.$init(shape, &data)
-                    .map_err(|_| Error {
-                        msg: "unexpected EOF",
-                        kind: ErrorKind::SerializationError,
-                        ctx: SerialTensorError::FailedFileIo,
-                    })?);
+                tensors.push(ctx.$init(shape, &data).map_err(|_| Error {
+                    msg: "unexpected EOF",
+                    kind: ErrorKind::SerializationError,
+                    ctx: SerialTensorError::FailedFileIo,
+                })?);
             }
 
             Ok(tensors)

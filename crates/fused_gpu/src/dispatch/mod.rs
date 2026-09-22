@@ -249,7 +249,10 @@ pub fn gpu_alloc<B: GpuBackend>(context: &B, len: u32) -> Result<GpuBuffer<B>, E
 }
 
 /// Allocate a buffer on the GPU and copy CPU memory into it.
-pub fn gpu_alloc_init<T: Pod, B: GpuBackend>(context: &B, data: &[T]) -> Result<GpuBuffer<B>, Error> {
+pub fn gpu_alloc_init<T: Pod, B: GpuBackend>(
+    context: &B,
+    data: &[T],
+) -> Result<GpuBuffer<B>, Error> {
     Ok(GpuBuffer {
         inner: context.alloc_init(slice_to_bytes(data))?,
     })
@@ -319,15 +322,9 @@ pub struct GpuContext<B: GpuBackend = backend::GpuContext> {
 }
 
 impl GpuContext<backend::GpuContext> {
-    /// Non-blocking creation of the context by searching for GPU.
-    ///
-    /// # Errors
-    ///
-    /// Failure is platform-specific and backend-dependent. It is likely a result of
-    /// not finding a supported device. Errors must be handled properly in critical code.
-    pub async fn new_nonblocking() -> Result<Self, Error> {
+    pub fn new() -> Result<Self, Error> {
         Ok(Self {
-            inner: backend::GpuContext::new().await?,
+            inner: backend::GpuContext::new()?,
         })
     }
 }
@@ -338,6 +335,7 @@ impl<B: GpuBackend> GpuContext<B> {
         Self { inner: ctx }
     }
 
+    /// Detects the available target configuration for this device/context.
     pub fn detect_target(&self) -> TargetCompilationOptions {
         self.inner.target_spec()
     }
@@ -371,7 +369,6 @@ impl<B: GpuBackend> GpuContext<B> {
                                 |(i, param)| if kernel.params[i] { Some(*param) } else { None },
                             )
                             .collect::<Vec<_>>();
-                        println!("{:?},{:?},", kernel.params, params.len());
 
                         Redirect::Unmasked((
                             self.inner.compile(&kernel.raw, &params, options)?,
@@ -477,13 +474,8 @@ impl<B: GpuBackend> GpuContext<B> {
     /// Failure is platform-specific and backend-dependent. It might only return an error
     /// if buffer lengths are unequal, but its behavior should not be assumed. Errors
     /// must be handled properly in critical code.
-    pub fn copy<S1: ToBuffer<B>, S2: ToBuffer<B>>(
-        &self,
-        src: &S1,
-        dst: &S2,
-    ) -> Result<(), Error> {
-        self.inner
-            .copy(src.as_buffer(), dst.as_buffer())
+    pub fn copy<S1: ToBuffer<B>, S2: ToBuffer<B>>(&self, src: &S1, dst: &S2) -> Result<(), Error> {
+        self.inner.copy(src.as_buffer(), dst.as_buffer())
     }
 
     pub fn sync(&self) -> Result<(), Error> {
@@ -561,7 +553,7 @@ impl<B: GpuBackend> GpuContext<B> {
     pub fn new_tensor<const N: u32>(&self, shape: Vec<u32>) -> Result<Tensor<B>, Error> {
         let len = shape.iter().product::<u32>() * const { N / 8 };
         let data = gpu_alloc(&self.inner, len)?;
-        Ok(Tensor { shape, data, })
+        Ok(Tensor { shape, data })
     }
 
     pub fn init_tensor_f64(&self, shape: Vec<u32>, data: &[f64]) -> Result<Tensor<B>, Error> {
@@ -599,7 +591,11 @@ impl<B: GpuBackend> GpuContext<B> {
         Ok(Tensor { shape, data })
     }
 
-    pub fn init_tensor_bf16(&self, shape: Vec<u32>, data: &[half::bf16]) -> Result<Tensor<B>, Error> {
+    pub fn init_tensor_bf16(
+        &self,
+        shape: Vec<u32>,
+        data: &[half::bf16],
+    ) -> Result<Tensor<B>, Error> {
         debug_assert_eq!(
             shape.iter().product::<u32>(),
             data.len() as u32,
@@ -653,9 +649,11 @@ impl<B: GpuBackend> GpuContext<B> {
 
         bindings.push(&alloc_tensors.forward_out);
 
-        let forward = self.inner.schedule(kernels.forward, &bindings, meta, &alloc_tensors.meta)?;
+        let forward = self
+            .inner
+            .schedule(kernels.forward, &bindings, meta, &alloc_tensors.meta)?;
 
-        bindings.truncate(1);
+        bindings.clear();
 
         bindings.push(&alloc_tensors.seed);
 
@@ -671,7 +669,9 @@ impl<B: GpuBackend> GpuContext<B> {
             .iter()
             .for_each(|t| bindings.push(t));
 
-        let backward = self.inner.schedule(kernels.backward, &bindings, meta, &alloc_tensors.meta)?;
+        let backward =
+            self.inner
+                .schedule(kernels.backward, &bindings, meta, &alloc_tensors.meta)?;
 
         let grid = alloc_tensors.loss_t.calc_grid(*kernels.loss.block());
 
@@ -691,10 +691,7 @@ impl<B: GpuBackend> GpuContext<B> {
             kernel: kernels.loss,
         };
 
-        let mut bindings = vec![
-            &alloc_tensors.seed,
-            &alloc_tensors.seed,
-        ];
+        let mut bindings = vec![&alloc_tensors.seed, &alloc_tensors.seed];
 
         for _ in 0..state.len() {
             bindings.push(&alloc_tensors.seed);
@@ -723,7 +720,11 @@ impl<B: GpuBackend> GpuContext<B> {
         self.inner.dispatch_schedule(&schedule.backward)
     }
 
-    pub fn dispatch_loss<T: ToBuffer<B>>(&self, schedule: &mut Schedule<'_, B>, target: &T) -> Result<(), Error> {
+    pub fn dispatch_loss<T: ToBuffer<B>>(
+        &self,
+        schedule: &mut Schedule<'_, B>,
+        target: &T,
+    ) -> Result<(), Error> {
         let mut bindings = schedule.loss.bindings;
         bindings[3] = target.as_buffer();
 
@@ -753,12 +754,8 @@ impl<B: GpuBackend> GpuContext<B> {
             bindings[2 + state_t] = &schedule.optim.state[state_t];
         }
 
-        self.inner.dispatch_kernel(
-                &schedule.optim.kernel,
-                grid,
-                &bindings,
-                schedule.optim.meta,
-            )
+        self.inner
+            .dispatch_kernel(&schedule.optim.kernel, grid, &bindings, schedule.optim.meta)
     }
 
     #[cfg(feature = "io")]

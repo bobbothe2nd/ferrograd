@@ -2,9 +2,7 @@
 
 use core::fmt;
 use std::{
-    fs::File,
-    io::{BufReader, Read},
-    path::Path,
+    fs::{File, create_dir_all}, io::{BufReader, Read}, path::Path,
 };
 
 use crate::{
@@ -101,6 +99,14 @@ pub fn save_tensors<P: AsRef<Path>, B: GpuBackend>(
     tensors: &[Tensor<B>],
     header: BpatHeader,
 ) -> Result<(), Error<SerialTensorError>> {
+    if let Some(parent) = path.as_ref().parent() {
+        create_dir_all(parent).map_err(|_| Error {
+            msg: "failed to create directory",
+            kind: ErrorKind::SerializationError,
+            ctx: SerialTensorError::FailedFileIo,
+        })?;
+    }
+
     match header {
         BpatHeader::BpatV0 => versions::v0_v2::save_tensors_v0(path, ctx, tensors),
         BpatHeader::BpatV1 => versions::v1::save_tensors_v1(path, ctx, tensors),

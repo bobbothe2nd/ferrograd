@@ -1,16 +1,13 @@
 use crate::{
-    dispatch::{
-        backend::{
-            Axis, DType, Op, Param, ParamTy, SimpleDType, ValueId, ValueState,
-            kernel::RawKernel,
-        },
+    dispatch::backend::{
+        Axis, DType, Op, Param, ParamTy, SimpleDType, ValueId, ValueState, kernel::RawKernel,
     },
     errors::{Error, ErrorKind},
 };
 use core::{fmt::Write, str::FromStr};
 use std::{string::String, vec::Vec};
 
-pub use wgpu::{BindGroupLayoutEntry, BindingType, BufferBindingType,ShaderStages,};
+pub use wgpu::{BindGroupLayoutEntry, BindingType, BufferBindingType, ShaderStages};
 
 #[inline]
 pub(super) fn generate_layout_desc(params: &[Param]) -> Vec<BindGroupLayoutEntry> {
@@ -29,10 +26,7 @@ pub(super) fn generate_layout_desc(params: &[Param]) -> Vec<BindGroupLayoutEntry
                 ty: BindingType::Buffer {
                     ty,
                     has_dynamic_offset: false,
-                    min_binding_size: match ty {
-                        BufferBindingType::Uniform => None,
-                        BufferBindingType::Storage { .. } => None,
-                    },
+                    min_binding_size: None,
                 },
                 count: None,
             }
@@ -47,7 +41,7 @@ pub(super) fn generate_wgsl(
     pretty_print: bool,
 ) -> Result<String, Error> {
     let mut out = String::from_str("enable f16;").map_err(|_| Error {
-        msg: "infallible",
+        msg: "failed to copy &'static str to String",
         kind: ErrorKind::InternalError,
         ctx: (),
     })?;
@@ -58,6 +52,10 @@ pub(super) fn generate_wgsl(
     newline(pretty_print, &mut out, 0);
 
     emit_entry(kernel, &mut out, pretty_print)?;
+
+    if pretty_print {
+        log::log!(log::Level::Debug, "{out}");
+    }
 
     Ok(out)
 }

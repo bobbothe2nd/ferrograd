@@ -1,6 +1,6 @@
 use ferrograd::{
     dispatch::{
-        CompilationOptions, DType, DebugCompilationOptions, GpuContext, Graph, Metadata,
+        CompilationOptions, SimpleDType, DebugCompilationOptions, GpuContext, Graph, Metadata,
         OptCompilationOptions,
     },
     nn::{CROSS_ENTROPY, MEAN_SQUARED_ERROR, Optim},
@@ -12,16 +12,16 @@ fn mul_add_forward_backward() {
     let m = meta.new_field();
     let n = meta.new_field();
 
-    let state = Optim::STOCHASTIC_GRADIENT_DESCENT.state;
+    let state = Optim::sgd().state;
 
-    let mut graph = Graph::new(MEAN_SQUARED_ERROR, Optim::STOCHASTIC_GRADIENT_DESCENT.lower);
+    let mut graph = Graph::new(MEAN_SQUARED_ERROR, Optim::sgd().lower);
 
     {
         let mut graph = graph.define_ops();
 
-        let a = graph.input(&[m, n], DType::F32);
-        let b = graph.input(&[m, n], DType::F32);
-        let c = graph.input(&[m, n], DType::F32);
+        let a = graph.input(&[m, n], SimpleDType::F32);
+        let b = graph.input(&[m, n], SimpleDType::F32);
+        let c = graph.input(&[m, n], SimpleDType::F32);
 
         let x = graph.mul(a, b);
         graph.add(c, x);
@@ -41,18 +41,18 @@ fn mul_add_forward_backward() {
     assert!(meta.validate_meta(&meta_binding));
     let meta_binding = ctx.alloc_meta(&meta_binding);
 
-    let saved_tensors = ctx.alloc_tensors(&graph, &saved, meta_binding, &state);
+    let saved_tensors = ctx.alloc_tensors(&graph, &saved, meta_binding, &state).unwrap();
 
     let ir = graph.lower(meta, &options, &saved).unwrap();
     let kernels = ctx.compile(&ir, &options).unwrap();
 
     let in_tensors = [
-        ctx.init_tensor_f32([32, 32].to_vec(), &[3.0; 1024]),
-        ctx.init_tensor_f32([32, 32].to_vec(), &[2.0; 1024]),
-        ctx.init_tensor_f32([32, 32].to_vec(), &[1.0; 1024]),
+        ctx.init_tensor_f32([32, 32].to_vec(), &[3.0; 1024]).unwrap(),
+        ctx.init_tensor_f32([32, 32].to_vec(), &[2.0; 1024]).unwrap(),
+        ctx.init_tensor_f32([32, 32].to_vec(), &[1.0; 1024]).unwrap(),
     ];
 
-    let upload = ctx.upload(&saved_tensors.seed, &[1_f32; 1024], 0).unwrap();
+    ctx.upload(&saved_tensors.seed, &[1_f32; 1024], 0, 0).unwrap();
 
     let schedule = ctx
         .schedule(
@@ -65,18 +65,10 @@ fn mul_add_forward_backward() {
         )
         .unwrap();
 
-    let mut state = ctx.prepare_batch();
+    ctx.dispatch_forward(&schedule).unwrap();
+    ctx.dispatch_backward(&schedule).unwrap();
 
-    {
-        let mut pass = ctx.start_batch(&mut state);
-
-        pass.dispatch_forward(&schedule);
-        pass.dispatch_backward(&schedule);
-    }
-
-    upload.sync();
-
-    state.encode().submit().sync();
+    ctx.sync().unwrap();
 
     let mut dst = [0_f32; 1024];
 
@@ -103,16 +95,16 @@ fn matmul_sub_softmax_forward_backward() {
     let n = meta.new_field();
     let k = meta.new_field();
 
-    let state = Optim::STOCHASTIC_GRADIENT_DESCENT.state;
+    let state = Optim::sgd().state;
 
-    let mut graph = Graph::new(CROSS_ENTROPY, Optim::STOCHASTIC_GRADIENT_DESCENT.lower);
+    let mut graph = Graph::new(CROSS_ENTROPY, Optim::sgd().lower);
 
     {
         let mut graph = graph.define_ops();
 
-        let a = graph.input(&[m, k], DType::F32);
-        let b = graph.input(&[k, n], DType::F32);
-        let c = graph.input(&[m, n], DType::F32);
+        let a = graph.input(&[m, k], SimpleDType::F32);
+        let b = graph.input(&[k, n], SimpleDType::F32);
+        let c = graph.input(&[m, n], SimpleDType::F32);
 
         let x = graph.matmul(a, b);
         let s = graph.sub(c, x);
@@ -133,19 +125,19 @@ fn matmul_sub_softmax_forward_backward() {
     assert!(meta.validate_meta(&meta_binding));
     let meta_binding = ctx.alloc_meta(&meta_binding);
 
-    let saved_tensors = ctx.alloc_tensors(&graph, &saved, meta_binding, &state);
+    let saved_tensors = ctx.alloc_tensors(&graph, &saved, meta_binding, &state).unwrap();
 
     let ir = graph.lower(meta, &options, &saved).unwrap();
     let kernels = ctx.compile(&ir, &options).unwrap();
 
     let in_tensors = [
-        ctx.init_tensor_f32([16, 32].to_vec(), &[3.0; 512]),
-        ctx.init_tensor_f32([32, 64].to_vec(), &[2.0; 2048]),
-        ctx.init_tensor_f32([16, 64].to_vec(), &[1.0; 1024]),
+        ctx.init_tensor_f32([16, 32].to_vec(), &[3.0; 512]).unwrap(),
+        ctx.init_tensor_f32([32, 64].to_vec(), &[2.0; 2048]).unwrap(),
+        ctx.init_tensor_f32([16, 64].to_vec(), &[1.0; 1024]).unwrap(),
     ];
 
-    let upload = ctx
-        .upload(&saved_tensors.seed, &[1.0_f32; 1024], 0)
+    ctx
+        .upload(&saved_tensors.seed, &[1.0_f32; 1024], 0, 0)
         .unwrap();
 
     let schedule = ctx
@@ -159,18 +151,10 @@ fn matmul_sub_softmax_forward_backward() {
         )
         .unwrap();
 
-    let mut state = ctx.prepare_batch();
+    ctx.dispatch_forward(&schedule).unwrap();
+    ctx.dispatch_backward(&schedule).unwrap();
 
-    {
-        let mut pass = ctx.start_batch(&mut state);
-
-        pass.dispatch_forward(&schedule);
-        pass.dispatch_backward(&schedule);
-    }
-
-    upload.sync();
-
-    state.encode().submit().sync();
+    ctx.sync().unwrap();
 
     let mut dst = [0_f32; 2048];
 
@@ -178,7 +162,6 @@ fn matmul_sub_softmax_forward_backward() {
     let grad_tensors = &saved_tensors.grad_tensors;
 
     ctx.download(out_tensor, &mut dst).unwrap();
-    std::eprintln!("{:?}", &dst[..64]);
     let download = &dst[..1024];
     assert!(download.iter().all(|x| *x == 1.0 / 64.0));
 
@@ -200,14 +183,14 @@ fn div_const_softmax_forward_backward() {
     let m = meta.new_field();
     let n = meta.new_field();
 
-    let state = Optim::STOCHASTIC_GRADIENT_DESCENT.state;
+    let state = Optim::sgd().state;
 
-    let mut graph = Graph::new(CROSS_ENTROPY, Optim::STOCHASTIC_GRADIENT_DESCENT.lower);
+    let mut graph = Graph::new(CROSS_ENTROPY, Optim::sgd().lower);
 
     {
         let mut graph = graph.define_ops();
 
-        let x = graph.input(&[m, n], DType::F32);
+        let x = graph.input(&[m, n], SimpleDType::F32);
 
         let two = graph.constant_f32(2.0);
         let logits = graph.div(two, x);
@@ -229,14 +212,14 @@ fn div_const_softmax_forward_backward() {
     assert!(meta.validate_meta(&meta_binding));
     let meta_binding = ctx.alloc_meta(&meta_binding);
 
-    let saved_tensors = ctx.alloc_tensors(&graph, &saved, meta_binding, &state);
+    let saved_tensors = ctx.alloc_tensors(&graph, &saved, meta_binding, &state).unwrap();
 
     let ir = graph.lower(meta, &options, &saved).unwrap();
     let kernels = ctx.compile(&ir, &options).unwrap();
 
-    let in_tensors = [ctx.init_tensor_f32([16, 32].to_vec(), &[3.0; 512])];
+    let in_tensors = [ctx.init_tensor_f32([16, 32].to_vec(), &[3.0; 512]).unwrap()];
 
-    let upload = ctx.upload(&saved_tensors.seed, &[1_f32; 512], 0).unwrap();
+    ctx.upload(&saved_tensors.seed, &[1_f32; 512], 0, 0).unwrap();
 
     let schedule = ctx
         .schedule(
@@ -249,18 +232,10 @@ fn div_const_softmax_forward_backward() {
         )
         .unwrap();
 
-    let mut state = ctx.prepare_batch();
+    ctx.dispatch_forward(&schedule).unwrap();
+    ctx.dispatch_backward(&schedule).unwrap();
 
-    {
-        let mut pass = ctx.start_batch(&mut state);
-
-        pass.dispatch_forward(&schedule);
-        pass.dispatch_backward(&schedule);
-    }
-
-    upload.sync();
-
-    state.encode().submit().sync();
+    ctx.sync().unwrap();
 
     let mut dst = [0_f32; 512];
 
@@ -268,6 +243,7 @@ fn div_const_softmax_forward_backward() {
     let grad_tensors = &saved_tensors.grad_tensors;
 
     ctx.download(out_tensor, &mut dst).unwrap();
+    println!("{:?}", &dst[..64]);
     assert!(dst.iter().all(|x| *x == 2.0 + (1.0 / 32.0)));
 
     ctx.download(&grad_tensors[0], &mut dst).unwrap();
@@ -289,16 +265,16 @@ fn matmul_add_forward_backward() {
     let n = meta.new_field();
     let k = meta.new_field();
 
-    let state = Optim::STOCHASTIC_GRADIENT_DESCENT.state;
+    let state = Optim::sgd().state;
 
-    let mut graph = Graph::new(MEAN_SQUARED_ERROR, Optim::STOCHASTIC_GRADIENT_DESCENT.lower);
+    let mut graph = Graph::new(MEAN_SQUARED_ERROR, Optim::sgd().lower);
 
     {
         let mut graph = graph.define_ops();
 
-        let a = graph.input(&[m, k], DType::F32);
-        let b = graph.input(&[k, n], DType::F32);
-        let c = graph.input(&[m, n], DType::F32);
+        let a = graph.input(&[m, k], SimpleDType::F32);
+        let b = graph.input(&[k, n], SimpleDType::F32);
+        let c = graph.input(&[m, n], SimpleDType::F32);
 
         let x = graph.matmul(a, b);
         graph.add(x, c);
@@ -318,19 +294,19 @@ fn matmul_add_forward_backward() {
     assert!(meta.validate_meta(&meta_binding));
     let meta_binding = ctx.alloc_meta(&meta_binding);
 
-    let saved_tensors = ctx.alloc_tensors(&graph, &saved, meta_binding, &state);
+    let saved_tensors = ctx.alloc_tensors(&graph, &saved, meta_binding, &state).unwrap();
 
     let ir = graph.lower(meta, &options, &saved).unwrap();
     let kernels = ctx.compile(&ir, &options).unwrap();
 
     let in_tensors = [
-        ctx.init_tensor_f32([M, K].to_vec(), &[A_VAL; (M * K) as usize]),
-        ctx.init_tensor_f32([K, N].to_vec(), &[B_VAL; (K * N) as usize]),
-        ctx.init_tensor_f32([M, N].to_vec(), &[C_VAL; (M * N) as usize]),
+        ctx.init_tensor_f32([M, K].to_vec(), &[A_VAL; (M * K) as usize]).unwrap(),
+        ctx.init_tensor_f32([K, N].to_vec(), &[B_VAL; (K * N) as usize]).unwrap(),
+        ctx.init_tensor_f32([M, N].to_vec(), &[C_VAL; (M * N) as usize]).unwrap(),
     ];
 
-    let upload = ctx
-        .upload(&saved_tensors.seed, &[1_f32; (M * N) as usize], 0)
+    ctx
+        .upload(&saved_tensors.seed, &[1_f32; (M * N) as usize], 0, 0)
         .unwrap();
 
     let schedule = ctx
@@ -344,18 +320,10 @@ fn matmul_add_forward_backward() {
         )
         .unwrap();
 
-    let mut state = ctx.prepare_batch();
+    ctx.dispatch_forward(&schedule).unwrap();
+    ctx.dispatch_backward(&schedule).unwrap();
 
-    {
-        let mut pass = ctx.start_batch(&mut state);
-
-        pass.dispatch_forward(&schedule);
-        pass.dispatch_backward(&schedule);
-    }
-
-    upload.sync();
-
-    state.encode().submit().sync();
+    ctx.sync().unwrap();
 
     let mut dst = vec![0_f32; (M * N).max(M * K).max(K * N) as usize];
 
@@ -411,18 +379,18 @@ fn matmul_chain3_forward_backward() {
     let k = meta.new_field();
     let h = meta.new_field();
 
-    let state = Optim::STOCHASTIC_GRADIENT_DESCENT.state;
+    let state = Optim::sgd().state;
 
-    let mut graph = Graph::new(MEAN_SQUARED_ERROR, Optim::STOCHASTIC_GRADIENT_DESCENT.lower);
+    let mut graph = Graph::new(MEAN_SQUARED_ERROR, Optim::sgd().lower);
 
     {
         let mut graph = graph.define_ops();
 
-        let a = graph.input(&[m, k], DType::F32);
-        let b = graph.input(&[k, n], DType::F32);
-        let c = graph.input(&[h, m], DType::F32);
-        let d = graph.input(&[n, h], DType::F32);
-        let e = graph.input(&[h, h], DType::F32);
+        let a = graph.input(&[m, k], SimpleDType::F32);
+        let b = graph.input(&[k, n], SimpleDType::F32);
+        let c = graph.input(&[h, m], SimpleDType::F32);
+        let d = graph.input(&[n, h], SimpleDType::F32);
+        let e = graph.input(&[h, h], SimpleDType::F32);
 
         let x = graph.matmul(a, b);
         let y = graph.matmul(c, x);
@@ -444,21 +412,21 @@ fn matmul_chain3_forward_backward() {
     assert!(meta.validate_meta(&meta_binding));
     let meta_binding = ctx.alloc_meta(&meta_binding);
 
-    let saved_tensors = ctx.alloc_tensors(&graph, &saved, meta_binding, &state);
+    let saved_tensors = ctx.alloc_tensors(&graph, &saved, meta_binding, &state).unwrap();
 
     let ir = graph.lower(meta, &options, &saved).unwrap();
     let kernels = ctx.compile(&ir, &options).unwrap();
 
     let in_tensors = [
-        ctx.init_tensor_f32([M, K].to_vec(), &[A_VAL; (M * K) as usize]),
-        ctx.init_tensor_f32([K, N].to_vec(), &[B_VAL; (K * N) as usize]),
-        ctx.init_tensor_f32([H, M].to_vec(), &[C_VAL; (H * M) as usize]),
-        ctx.init_tensor_f32([N, H].to_vec(), &[D_VAL; (N * H) as usize]),
-        ctx.init_tensor_f32([H, H].to_vec(), &[E_VAL; (H * H) as usize]),
+        ctx.init_tensor_f32([M, K].to_vec(), &[A_VAL; (M * K) as usize]).unwrap(),
+        ctx.init_tensor_f32([K, N].to_vec(), &[B_VAL; (K * N) as usize]).unwrap(),
+        ctx.init_tensor_f32([H, M].to_vec(), &[C_VAL; (H * M) as usize]).unwrap(),
+        ctx.init_tensor_f32([N, H].to_vec(), &[D_VAL; (N * H) as usize]).unwrap(),
+        ctx.init_tensor_f32([H, H].to_vec(), &[E_VAL; (H * H) as usize]).unwrap(),
     ];
 
-    let upload = ctx
-        .upload(&saved_tensors.seed, &[1_f32; (H * H) as usize], 0)
+    ctx
+        .upload(&saved_tensors.seed, &[1_f32; (H * H) as usize], 0, 0)
         .unwrap();
 
     let schedule = ctx
@@ -472,18 +440,10 @@ fn matmul_chain3_forward_backward() {
         )
         .unwrap();
 
-    let mut state = ctx.prepare_batch();
+    ctx.dispatch_forward(&schedule).unwrap();
+    ctx.dispatch_backward(&schedule).unwrap();
 
-    {
-        let mut pass = ctx.start_batch(&mut state);
-
-        pass.dispatch_forward(&schedule);
-        pass.dispatch_backward(&schedule);
-    }
-
-    upload.sync();
-
-    state.encode().submit().sync();
+    ctx.sync().unwrap();
 
     let max_len = in_tensors.iter().map(|x| x.len()).max().unwrap_or(0) as usize;
     let mut dst = vec![0.0; max_len];
@@ -554,17 +514,17 @@ fn matmul_sub_forward_backward() {
     let n = meta.new_field();
     let k = meta.new_field();
 
-    let state = Optim::STOCHASTIC_GRADIENT_DESCENT.state;
+    let state = Optim::sgd().state;
 
-    let mut graph = Graph::new(MEAN_SQUARED_ERROR, Optim::STOCHASTIC_GRADIENT_DESCENT.lower);
+    let mut graph = Graph::new(MEAN_SQUARED_ERROR, Optim::sgd().lower);
 
     {
         let mut graph = graph.define_ops();
 
-        let a = graph.input(&[m, k], DType::F32);
-        let b = graph.input(&[k, n], DType::F32);
-        let c = graph.input(&[m, k], DType::F32);
-        let d = graph.input(&[k, n], DType::F32);
+        let a = graph.input(&[m, k], SimpleDType::F32);
+        let b = graph.input(&[k, n], SimpleDType::F32);
+        let c = graph.input(&[m, k], SimpleDType::F32);
+        let d = graph.input(&[k, n], SimpleDType::F32);
 
         let x = graph.matmul(a, b);
         let y = graph.matmul(c, d);
@@ -586,20 +546,20 @@ fn matmul_sub_forward_backward() {
     assert!(meta.validate_meta(&meta_binding));
     let meta_binding = ctx.alloc_meta(&meta_binding);
 
-    let saved_tensors = ctx.alloc_tensors(&graph, &saved, meta_binding, &state);
+    let saved_tensors = ctx.alloc_tensors(&graph, &saved, meta_binding, &state).unwrap();
 
     let ir = graph.lower(meta, &options, &saved).unwrap();
     let kernels = ctx.compile(&ir, &options).unwrap();
 
     let in_tensors = [
-        ctx.init_tensor_f32([M, K].to_vec(), &[A_VAL; (M * K) as usize]),
-        ctx.init_tensor_f32([K, N].to_vec(), &[B_VAL; (K * N) as usize]),
-        ctx.init_tensor_f32([M, K].to_vec(), &[C_VAL; (M * K) as usize]),
-        ctx.init_tensor_f32([K, N].to_vec(), &[D_VAL; (K * N) as usize]),
+        ctx.init_tensor_f32([M, K].to_vec(), &[A_VAL; (M * K) as usize]).unwrap(),
+        ctx.init_tensor_f32([K, N].to_vec(), &[B_VAL; (K * N) as usize]).unwrap(),
+        ctx.init_tensor_f32([M, K].to_vec(), &[C_VAL; (M * K) as usize]).unwrap(),
+        ctx.init_tensor_f32([K, N].to_vec(), &[D_VAL; (K * N) as usize]).unwrap(),
     ];
 
-    let upload = ctx
-        .upload(&saved_tensors.seed, &[1_f32; (M * N) as usize], 0)
+    ctx
+        .upload(&saved_tensors.seed, &[1_f32; (M * N) as usize], 0, 0)
         .unwrap();
 
     let schedule = ctx
@@ -613,18 +573,10 @@ fn matmul_sub_forward_backward() {
         )
         .unwrap();
 
-    let mut state = ctx.prepare_batch();
+    ctx.dispatch_forward(&schedule).unwrap();
+    ctx.dispatch_backward(&schedule).unwrap();
 
-    {
-        let mut pass = ctx.start_batch(&mut state);
-
-        pass.dispatch_forward(&schedule);
-        pass.dispatch_backward(&schedule);
-    }
-
-    upload.sync();
-
-    state.encode().submit().sync();
+    ctx.sync().unwrap();
 
     let max_len = in_tensors.iter().map(|x| x.len()).max().unwrap_or(0) as usize;
     let mut dst = vec![0.0; max_len];

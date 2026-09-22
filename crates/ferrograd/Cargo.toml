@@ -35,16 +35,16 @@ required-features = ["wgsl"]
 
 [[example]]
 name = "save_load_model"
-required-features = ["wgsl", "rocm"]
+required-features = ["wgsl"]
 
 [[test]]
 name = "std_wgsl"
-required-features = ["rocm"]
+required-features = []
 
 [[test]]
 name = "nonf32"
-required-features = ["rocm"]
+required-features = []
 
 [[test]]
 name = "optim"
-required-features = ["rocm"]
+required-features = []

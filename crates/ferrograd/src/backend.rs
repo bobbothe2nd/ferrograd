@@ -3,26 +3,27 @@
 use briny::traits::Pod;
 use fused_gpu::{
     dispatch::{
-        GpuContext as InnerCtx, backend::{
-            NopGpuContext, NodeId,
+        GpuContext as InnerCtx, self,
+        backend::{
+            NodeId, NopGpuContext,
             kernel::{Dependencies, RawKernel, Redirect, SaveIndicator},
         },
-    }, errors::Error, io::{BpatHeader, SerialTensorError}, tensor::{Tensor, ToBuffer, bf16, f16},
+    },
+    errors::Error,
+    io::{BpatHeader, SerialTensorError},
+    tensor::{Tensor, ToBuffer, bf16, f16},
 };
-use std::{
-    ops::{Deref, DerefMut},
-    path::Path,
-};
+
+use core::ops::{Deref, DerefMut};
+use std::path::Path;
 
 #[cfg(feature = "wgsl")]
 use fused_gpu::dispatch::backend::wgsl;
 
 use crate::{
     dispatch::{
-        GpuKernelGroup, KernelGroup, AllocTensors, CompilationOptions,
-        GpuBackend, GpuBufferBackend, GpuKernelBackend, TargetCompilationOptions,
-        OptimState, Param,
-        
+        AllocTensors, CompilationOptions, GpuBackend, GpuBufferBackend, GpuKernelBackend,
+        GpuKernelGroup, KernelGroup, OptimState, Param, TargetCompilationOptions,
     },
     graph::Graph,
 };
@@ -31,10 +32,10 @@ pub struct SavedNodes(pub(crate) Vec<SaveIndicator>);
 
 pub struct MetaBinding(pub(crate) [u32]);
 
-pub struct Schedule<'a, B: GpuBackend = Dynamic>(fused_gpu::dispatch::Schedule<'a, B>);
+pub struct Schedule<'a, B: GpuBackend = Dynamic>(dispatch::Schedule<'a, B>);
 
 impl<'a, B: GpuBackend> Deref for Schedule<'a, B> {
-    type Target = fused_gpu::dispatch::Schedule<'a, B>;
+    type Target = dispatch::Schedule<'a, B>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -62,13 +63,13 @@ impl GpuContext<Dynamic> {
         #[cfg(feature = "wgsl")]
         {
             Ok(Self::new_with_context(Dynamic::Wgsl(
-                wgsl::GpuContext::new().await?,
+                wgsl::GpuContext::new()?,
             )))
         }
         #[cfg(not(feature = "wgsl"))]
         {
             Ok(Self::new_with_context(Dynamic::None(
-                NopGpuContext::new().await?,
+                NopGpuContext::new()?,
             )))
         }
     }
@@ -122,7 +123,6 @@ impl<B: GpuBackend> GpuContext<B> {
     }
 
     #[inline]
-    #[must_use]
     pub fn alloc_tensors(
         &self,
         graph: &Graph<'_>,
@@ -176,7 +176,11 @@ impl<B: GpuBackend> GpuContext<B> {
         self.0.dispatch_backward(schedule)
     }
 
-    pub fn dispatch_loss(&self, schedule: &mut Schedule<'_, B>, target: &Tensor<B>) -> Result<(), Error> {
+    pub fn dispatch_loss(
+        &self,
+        schedule: &mut Schedule<'_, B>,
+        target: &Tensor<B>,
+    ) -> Result<(), Error> {
         self.0.dispatch_loss(schedule, target)
     }
 
@@ -187,12 +191,7 @@ impl<B: GpuBackend> GpuContext<B> {
         grad: usize,
         tensors: &AllocTensors<B>,
     ) -> Result<(), Error> {
-        self.0.dispatch_optim(
-            schedule,
-            weight,
-            grad,
-            tensors,
-        )
+        self.0.dispatch_optim(schedule, weight, grad, tensors)
     }
 
     #[inline]
@@ -212,11 +211,7 @@ impl<B: GpuBackend> GpuContext<B> {
     }
 
     #[inline]
-    pub fn copy<S1: ToBuffer<B>, S2: ToBuffer<B>>(
-        &self,
-        src: &S1,
-        dst: &S2,
-    ) -> Result<(), Error> {
+    pub fn copy<S1: ToBuffer<B>, S2: ToBuffer<B>>(&self, src: &S1, dst: &S2) -> Result<(), Error> {
         self.0.copy(src, dst)
     }
 
@@ -230,37 +225,31 @@ impl<B: GpuBackend> GpuContext<B> {
     }
 
     #[inline]
-    #[must_use]
     pub fn init_tensor_bf16(&self, shape: Vec<u32>, data: &[bf16]) -> Result<Tensor<B>, Error> {
         self.0.init_tensor_bf16(shape, data)
     }
 
     #[inline]
-    #[must_use]
     pub fn init_tensor_f16(&self, shape: Vec<u32>, data: &[f16]) -> Result<Tensor<B>, Error> {
         self.0.init_tensor_f16(shape, data)
     }
 
     #[inline]
-    #[must_use]
     pub fn init_tensor_f32(&self, shape: Vec<u32>, data: &[f32]) -> Result<Tensor<B>, Error> {
         self.0.init_tensor_f32(shape, data)
     }
 
     #[inline]
-    #[must_use]
     pub fn init_tensor_f64(&self, shape: Vec<u32>, data: &[f64]) -> Result<Tensor<B>, Error> {
         self.0.init_tensor_f64(shape, data)
     }
 
     #[inline]
-    #[must_use]
     pub fn new_onehot(&self, classes: u32) -> Result<Tensor<B>, Error> {
         self.0.new_onehot(classes)
     }
 
     #[inline]
-    #[must_use]
     pub fn init_onehot(&self, indices: &[u32]) -> Result<Tensor<B>, Error> {
         self.0.new_onehot_init(indices)
     }
@@ -382,7 +371,8 @@ impl GpuBackend for Dynamic {
                     .collect::<Vec<_>>();
                 let bindings = bindings.iter().copied().map(Into::into).collect::<Vec<_>>();
 
-                ctx.schedule(kernels, &bindings, meta, meta_buf.into())?.into()
+                ctx.schedule(kernels, &bindings, meta, meta_buf.into())?
+                    .into()
             }
             #[cfg(feature = "wgsl")]
             Self::Wgsl(ctx) => {
@@ -400,7 +390,8 @@ impl GpuBackend for Dynamic {
                     .collect::<Vec<_>>();
                 let bindings = bindings.iter().cloned().map(Into::into).collect::<Vec<_>>();
 
-                ctx.schedule(kernels, &bindings, meta, meta_buf.into())?.into()
+                ctx.schedule(kernels, &bindings, meta, meta_buf.into())?
+                    .into()
             }
         })
     }
@@ -496,7 +487,12 @@ macro_rules! impl_backend {
     };
 }
 
-impl_backend!(#[derive(Debug)] DynBuffer, (), Buffer);
+impl_backend!(
+    #[derive(Debug)]
+    DynBuffer,
+    (),
+    Buffer
+);
 
 impl GpuBufferBackend for DynBuffer {
     fn size(&self) -> u32 {
@@ -511,7 +507,7 @@ impl GpuBufferBackend for DynBuffer {
         match self {
             Self::None(_) => 0,
             #[cfg(feature = "wgsl")]
-            Self::Wgsl(ctx) => ctx.size_bytes() as u32,
+            Self::Wgsl(ctx) => ctx.size_bytes(),
         }
     }
 }
@@ -530,7 +526,7 @@ impl_backend!(DynKernel, (), GpuKernel);
 
 impl GpuKernelBackend for DynKernel {
     impl_op! {
-        iteration_space(&self,) -> &[fused_gpu::dispatch::backend::MetaId]
+        iteration_space(&self,) -> &[dispatch::backend::MetaId]
         block(&self,) -> &[u32; 3]
     }
 }

@@ -1,7 +1,7 @@
 use ferrograd::{
     dispatch::{
-        CompilationOptions, SimpleDType, DebugCompilationOptions, GpuContext, Graph, Metadata,
-        OptCompilationOptions,
+        CompilationOptions, DebugCompilationOptions, GpuContext, Graph, Metadata,
+        OptCompilationOptions, SimpleDType,
     },
     nn::{MEAN_SQUARED_ERROR, Optim},
     tensor::f16,
@@ -13,9 +13,9 @@ fn mul_add_f16() {
     let m = meta.new_field();
     let n = meta.new_field();
 
-    let state = Optim::STOCHASTIC_GRADIENT_DESCENT.state;
+    let state = Optim::sgd().state;
 
-    let mut graph = Graph::new(MEAN_SQUARED_ERROR, Optim::STOCHASTIC_GRADIENT_DESCENT.lower);
+    let mut graph = Graph::new(MEAN_SQUARED_ERROR, Optim::sgd().lower);
 
     {
         let mut graph = graph.define_ops();
@@ -42,19 +42,24 @@ fn mul_add_f16() {
     assert!(meta.validate_meta(&meta_binding));
     let meta_binding = ctx.alloc_meta(&meta_binding);
 
-    let saved_tensors: fused_gpu::dispatch::AllocTensors<ferrograd::dispatch::backend::Dynamic> = ctx.alloc_tensors(&graph, &saved, meta_binding, &state).unwrap();
+    let saved_tensors: fused_gpu::dispatch::AllocTensors<ferrograd::dispatch::backend::Dynamic> =
+        ctx.alloc_tensors(&graph, &saved, meta_binding, &state)
+            .unwrap();
 
     let ir = graph.lower(meta, &options, &saved).unwrap();
     let kernels = ctx.compile(&ir, &options).unwrap();
 
     let in_tensors = [
-        ctx.init_tensor_f16([32, 32].to_vec(), &[f16::from_f32(3.0); 1024]).unwrap(),
-        ctx.init_tensor_f16([32, 32].to_vec(), &[f16::from_f32(2.0); 1024]).unwrap(),
-        ctx.init_tensor_f16([32, 32].to_vec(), &[f16::from_f32(1.0); 1024]).unwrap(),
+        ctx.init_tensor_f16([32, 32].to_vec(), &[f16::from_f32(3.0); 1024])
+            .unwrap(),
+        ctx.init_tensor_f16([32, 32].to_vec(), &[f16::from_f32(2.0); 1024])
+            .unwrap(),
+        ctx.init_tensor_f16([32, 32].to_vec(), &[f16::from_f32(1.0); 1024])
+            .unwrap(),
     ];
 
-    let upload = ctx
-        .upload(&saved_tensors.seed, &[f16::from_f32(1.0); 1024], 0)
+    ctx
+        .upload(&saved_tensors.seed, &[f16::from_f32(1.0); 1024], 0, 0)
         .unwrap();
 
     let schedule = ctx
@@ -68,16 +73,10 @@ fn mul_add_f16() {
         )
         .unwrap();
 
-    let mut state = ctx.prepare_batch().unwrap();
+    ctx.dispatch_forward(&schedule).unwrap();
+    ctx.dispatch_backward(&schedule).unwrap();
 
-    {
-        let mut pass = ctx.start_batch(&mut state);
-
-        pass.dispatch_forward(&schedule);
-        pass.dispatch_backward(&schedule);
-    }
-
-    state.submit();
+    ctx.sync().unwrap();
 
     let mut dst = [f16::from_f32(0_f32); 1024];
 

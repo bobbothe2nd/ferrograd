@@ -1,7 +1,5 @@
 use std::{
-    fs::File,
-    io::{BufReader, BufWriter, Read, Write},
-    path::Path,
+    fs::{File, OpenOptions}, io::{BufReader, BufWriter, Read, Write}, path::Path,
 };
 
 use briny::{
@@ -62,7 +60,11 @@ fn save_tensors<const U: usize, P: AsRef<Path>, F: Default + Pod + Clone, B: Gpu
     tensors: &[Tensor<B>],
     magic: &[u8],
 ) -> Result<(), Error<SerialTensorError>> {
-    let mut file = BufWriter::new(File::create(path).map_err(|_| Error {
+    let file_res = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .open(path);
+    let mut file = BufWriter::new(file_res.map_err(|_| Error {
         msg: "file not found",
         kind: ErrorKind::FileNotFound,
         ctx: SerialTensorError::InvalidPath,
@@ -182,12 +184,11 @@ macro_rules! impl_load {
                         ctx: SerialTensorError::FailedFileIo,
                     })?;
 
-                tensors.push(ctx.$init(shape, &data)
-                    .map_err(|_| Error {
-                        msg: "unexpected EOF",
-                        kind: ErrorKind::SerializationError,
-                        ctx: SerialTensorError::FailedFileIo,
-                    })?);
+                tensors.push(ctx.$init(shape, &data).map_err(|_| Error {
+                    msg: "unexpected EOF",
+                    kind: ErrorKind::SerializationError,
+                    ctx: SerialTensorError::FailedFileIo,
+                })?);
             }
 
             Ok(tensors)
@@ -299,8 +300,6 @@ mod tests {
         path::PathBuf,
         time::{SystemTime, UNIX_EPOCH},
     };
-
-    use pollster::block_on;
 
     use super::*;
     use crate::{
@@ -415,7 +414,7 @@ mod tests {
 
     #[test]
     fn roundtrip_v0_f64() {
-        let ctx = block_on(GpuContext::new_nonblocking()).unwrap();
+        let ctx = GpuContext::new().unwrap();
 
         let shape1 = [2, 3];
         let data1 = [0.0, 1.0, -2.5, 3.25, 100.0, -999.125];
@@ -443,7 +442,7 @@ mod tests {
 
     #[test]
     fn roundtrip_v2_f32() {
-        let ctx = block_on(GpuContext::new_nonblocking()).unwrap();
+        let ctx = GpuContext::new().unwrap();
 
         let shape1 = [2, 3];
         let data1 = [0.0, 1.0, -2.5, 3.25, 100.0, -999.125];
@@ -471,7 +470,7 @@ mod tests {
 
     #[test]
     fn roundtrip_v2_f16() {
-        let ctx = block_on(GpuContext::new_nonblocking()).unwrap();
+        let ctx = GpuContext::new().unwrap();
 
         let shape1 = [2, 3];
         let data1 = [
@@ -506,7 +505,7 @@ mod tests {
 
     #[test]
     fn roundtrip_v2_bf16() {
-        let ctx = block_on(GpuContext::new_nonblocking()).unwrap();
+        let ctx = GpuContext::new().unwrap();
 
         let shape1 = [2, 3];
         let data1 = [

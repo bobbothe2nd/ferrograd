@@ -3,10 +3,13 @@ use std::{string::String, vec, vec::Vec};
 
 use crate::{
     dispatch::{
-        CompilationOptions, GpuBackend, GpuBufferBackend, GpuKernelBackend, TargetCompilationOptions, TargetFlags, backend::kernel::{
+        CompilationOptions, GpuBackend, GpuBufferBackend, GpuKernelBackend,
+        TargetCompilationOptions, TargetFlags,
+        backend::kernel::{
             Kernel, KernelGroup, KernelsChained, LinkedKernel, NodeInput, RawKernel, SaveIndicator,
         },
-    }, errors::{Error, ErrorKind, GraphErrorContext},
+    },
+    errors::{Error, ErrorKind, GraphErrorContext},
 };
 
 pub mod kernel;
@@ -55,7 +58,6 @@ impl GpuKernelBackend for () {
 pub struct NopGpuContext;
 
 impl NopGpuContext {
-    #[allow(clippy::unused_async)]
     pub fn new() -> impl Future<Output = Result<Self, Error>> {
         core::future::ready(Err(Error {
             msg: "using nop backend",
@@ -188,11 +190,7 @@ impl GpuBackend for NopGpuContext {
         })
     }
 
-    fn copy(
-        &self,
-        _src: &Self::Buffer,
-        _dst: &Self::Buffer,
-    ) -> Result<(), Error> {
+    fn copy(&self, _src: &Self::Buffer, _dst: &Self::Buffer) -> Result<(), Error> {
         Err(Error {
             msg: "using nop backend",
             kind: ErrorKind::UnsupportedFeature,
@@ -250,7 +248,8 @@ impl DType {
     }
 
     #[inline]
-    pub fn is_float(self) -> bool {
+    #[must_use]
+    pub const fn is_float(self) -> bool {
         match self {
             Self::Simple(dtype) => dtype.is_float(),
             _ => false,
@@ -330,7 +329,8 @@ impl SimpleDType {
     }
 
     #[inline]
-    pub fn is_float(self) -> bool {
+    #[must_use]
+    pub const fn is_float(self) -> bool {
         matches!(self, Self::BF16 | Self::F16 | Self::F32 | Self::F64)
     }
 
