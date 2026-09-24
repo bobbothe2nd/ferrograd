@@ -12,7 +12,7 @@ keywords = ["autodiff", "autograd", "tensor", "machine-learning", "deep-learning
 categories = ["compilers", "mathematics"]
 
 [features]
-default = ["wgsl", "io", "rocm"]
+default = ["rocm"]
 
 wgsl = ["dep:wgpu", "dep:pollster"]
 rocm = ["dep:rocm-rt"]

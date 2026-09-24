@@ -31,7 +31,10 @@ fn mul_add_f16() {
     let saved = graph.compute_saved_nodes();
     graph.validate(meta).unwrap();
 
-    let ctx = GpuContext::new().unwrap();
+    let Ok(ctx) = GpuContext::new() else {
+        return;
+    };
+
     let options = CompilationOptions {
         target: ctx.detect_target(),
         opt: OptCompilationOptions::default(),
@@ -58,8 +61,7 @@ fn mul_add_f16() {
             .unwrap(),
     ];
 
-    ctx
-        .upload(&saved_tensors.seed, &[f16::from_f32(1.0); 1024], 0, 0)
+    ctx.upload(&saved_tensors.seed, &[f16::from_f32(1.0); 1024], 0, 0)
         .unwrap();
 
     let schedule = ctx

@@ -2,7 +2,9 @@
 
 use core::fmt;
 use std::{
-    fs::{File, create_dir_all}, io::{BufReader, Read}, path::Path,
+    fs::{File, create_dir_all},
+    io::{BufReader, Read},
+    path::Path,
 };
 
 use crate::{

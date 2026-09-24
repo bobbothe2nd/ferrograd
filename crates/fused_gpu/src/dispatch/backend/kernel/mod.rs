@@ -1,6 +1,6 @@
 use crate::{
     dispatch::{
-        CompilationOptions, GpuBackend,
+        CompilationOptions,
         backend::{
             DType, Graph, GraphOp, MetaId, Metadata, NodeId, Op, Param, ParamId, SharedAlloc,
             SharedId, SimpleDType, Value, ValueId, ValueState,
@@ -35,9 +35,9 @@ pub struct Dependencies<T> {
     pub dep: Vec<usize>,
 }
 
-pub fn topo_sort<B: GpuBackend, T: Clone>(
-    nodes: &mut [Dependencies<T>],
-) -> Result<(), Error<GraphErrorContext<'_>>> {
+pub fn topo_sort<T: Clone>(
+    nodes: &[Dependencies<T>],
+) -> Result<Vec<Dependencies<T>>, Error<GraphErrorContext<'_>>> {
     let n = nodes.len();
 
     let mut in_degree = vec![0_usize; n];
@@ -113,9 +113,7 @@ pub fn topo_sort<B: GpuBackend, T: Clone>(
         new_nodes.push(node);
     }
 
-    nodes.clone_from_slice(&new_nodes);
-
-    Ok(())
+    Ok(new_nodes)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

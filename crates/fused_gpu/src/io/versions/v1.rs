@@ -1,5 +1,7 @@
 use std::{
-    fs::{File, OpenOptions}, io::{BufReader, BufWriter, Read, Write}, path::Path,
+    fs::{File, OpenOptions},
+    io::{BufReader, BufWriter, Read, Write},
+    path::Path,
 };
 
 use briny::{
@@ -44,6 +46,7 @@ fn save_tensors<const U: usize, P: AsRef<Path>, F: Default + Pod + Clone, B: Gpu
     magic: &[u8],
 ) -> Result<(), Error<SerialTensorError>> {
     let file_res = OpenOptions::new()
+        .truncate(true)
         .create(true)
         .write(true)
         .open(path);

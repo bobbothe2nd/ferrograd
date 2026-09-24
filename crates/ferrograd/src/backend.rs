@@ -3,7 +3,7 @@
 use briny::traits::Pod;
 use fused_gpu::{
     dispatch::{
-        GpuContext as InnerCtx, self,
+        self, GpuContext as InnerCtx,
         backend::{
             NodeId, NopGpuContext,
             kernel::{Dependencies, RawKernel, Redirect, SaveIndicator},
@@ -19,6 +19,9 @@ use std::path::Path;
 
 #[cfg(feature = "wgsl")]
 use fused_gpu::dispatch::backend::wgsl;
+
+#[cfg(feature = "rocm")]
+use fused_gpu::dispatch::backend::rocm;
 
 use crate::{
     dispatch::{
@@ -53,25 +56,51 @@ impl<B: GpuBackend> DerefMut for Schedule<'_, B> {
 pub struct GpuContext<B: GpuBackend = Dynamic>(InnerCtx<B>);
 
 impl GpuContext<Dynamic> {
+    /// Tries to create a context prioritizing ROCm -> WGSL
     #[inline]
     pub fn new() -> Result<Self, Error> {
-        pollster::block_on(Self::new_nonblocking())
+        #[cfg(feature = "rocm")]
+        {
+            #[cfg(feature = "wgsl")]
+            {
+                if rocm::is_rocm_present() {
+                    Self::new_rocm()
+                } else {
+                    Self::new_wgsl()
+                }
+            }
+            #[cfg(not(feature = "wgsl"))]
+            {
+                Self::new_rocm()
+            }
+        }
+        #[cfg(not(feature = "rocm"))]
+        {
+            #[cfg(feature = "wgsl")]
+            {
+                Self::new_wgsl()
+            }
+            #[cfg(not(feature = "wgsl"))]
+            {
+                Ok(Self::new_with_context(Dynamic::None(NopGpuContext::new()?)))
+            }
+        }
     }
 
     #[inline]
-    pub async fn new_nonblocking() -> Result<Self, Error> {
-        #[cfg(feature = "wgsl")]
-        {
-            Ok(Self::new_with_context(Dynamic::Wgsl(
-                wgsl::GpuContext::new()?,
-            )))
-        }
-        #[cfg(not(feature = "wgsl"))]
-        {
-            Ok(Self::new_with_context(Dynamic::None(
-                NopGpuContext::new()?,
-            )))
-        }
+    #[cfg(feature = "rocm")]
+    pub fn new_rocm() -> Result<Self, Error> {
+        Ok(Self::new_with_context(Dynamic::Rocm(
+            rocm::GpuContext::new()?,
+        )))
+    }
+
+    #[inline]
+    #[cfg(feature = "wgsl")]
+    pub fn new_wgsl() -> Result<Self, Error> {
+        Ok(Self::new_with_context(Dynamic::Wgsl(
+            wgsl::GpuContext::new()?,
+        )))
     }
 }
 
@@ -261,6 +290,8 @@ pub enum Dynamic {
     None(NopGpuContext),
     #[cfg(feature = "wgsl")]
     Wgsl(wgsl::GpuContext),
+    #[cfg(feature = "rocm")]
+    Rocm(rocm::GpuContext)
 }
 
 macro_rules! impl_op {
@@ -272,6 +303,8 @@ macro_rules! impl_op {
                     Self::None(ctx) => ctx.$op($($arg.into()),*)?.into(),
                     #[cfg(feature = "wgsl")]
                     Self::Wgsl(ctx) => ctx.$op($($arg.into()),*)?.into(),
+                    #[cfg(feature = "rocm")]
+                    Self::Rocm(ctx) => ctx.$op($($arg.into()),*)?.into(),
                 })
             }
         )*
@@ -285,6 +318,8 @@ macro_rules! impl_op {
                     Self::None(ctx) => ctx.$op($($arg.into()),*).into(),
                     #[cfg(feature = "wgsl")]
                     Self::Wgsl(ctx) => ctx.$op($($arg.into()),*).into(),
+                    #[cfg(feature = "rocm")]
+                    Self::Rocm(ctx) => ctx.$op($($arg.into()),*).into(),
                 }
             }
         )*
@@ -333,13 +368,15 @@ impl GpuBackend for Dynamic {
         meta: &Self::MetaBuf,
     ) -> Result<(), Error> {
         match self {
-            Self::None(ctx) => {
+            Self::None(_) => Ok(()),
+            #[cfg(feature = "wgsl")]
+            Self::Wgsl(ctx) => {
                 let bindings = bindings.iter().copied().map(Into::into).collect::<Vec<_>>();
 
                 ctx.dispatch_kernel(kernel.into(), wg, &bindings, meta.into())
             }
-            #[cfg(feature = "wgsl")]
-            Self::Wgsl(ctx) => {
+            #[cfg(feature = "rocm")]
+            Self::Rocm(ctx) => {
                 let bindings = bindings.iter().copied().map(Into::into).collect::<Vec<_>>();
 
                 ctx.dispatch_kernel(kernel.into(), wg, &bindings, meta.into())
@@ -356,7 +393,9 @@ impl GpuBackend for Dynamic {
         meta_buf: &Self::MetaBuf,
     ) -> Result<Self::Schedule, Error> {
         Ok(match self {
-            Self::None(ctx) => {
+            Self::None(_) => ().into(),
+            #[cfg(feature = "wgsl")]
+            Self::Wgsl(ctx) => {
                 let kernels = kernels
                     .into_iter()
                     .map(|x| Dependencies {
@@ -369,13 +408,13 @@ impl GpuBackend for Dynamic {
                         dep: x.dep,
                     })
                     .collect::<Vec<_>>();
-                let bindings = bindings.iter().copied().map(Into::into).collect::<Vec<_>>();
+                let bindings = bindings.iter().cloned().map(Into::into).collect::<Vec<_>>();
 
                 ctx.schedule(kernels, &bindings, meta, meta_buf.into())?
                     .into()
             }
-            #[cfg(feature = "wgsl")]
-            Self::Wgsl(ctx) => {
+            #[cfg(feature = "rocm")]
+            Self::Rocm(ctx) => {
                 let kernels = kernels
                     .into_iter()
                     .map(|x| Dependencies {
@@ -398,100 +437,75 @@ impl GpuBackend for Dynamic {
 }
 
 macro_rules! impl_backend {
-    ($(#[$meta:meta])? $name:ident$(<$($lifetime:lifetime),*>)?, $nop:ty, $other:ident) => {
+    ($(#[$meta:meta])? $name:ident$(<$($lifetime:lifetime),*>)?, $nop:ident, $wgsl:ident, $rocm:ident$(,)?) => {
+        #[non_exhaustive]
         #[allow(clippy::large_enum_variant)]
         $(#[$meta])?
         pub enum $name$(<$($lifetime),*>)? {
             None($nop, $(PhantomData<$(&$lifetime ()),*>)?),
             #[cfg(feature = "wgsl")]
-            Wgsl(wgsl::$other$(<$($lifetime),*>)?),
+            Wgsl(wgsl::$wgsl$(<$($lifetime),*>)?),
+            #[cfg(feature = "rocm")]
+            Rocm(rocm::$rocm$(<$($lifetime),*>)?),
         }
 
-        impl$(<$($lifetime),*>)? From<$nop> for $name$(<$($lifetime),*>)? {
-            #[inline]
-            fn from(value: $nop) -> Self {
-                Self::None(value, $({ $(let _: &$lifetime ();)* PhantomData })?)
-            }
-        }
-
-        #[cfg(feature = "wgsl")]
-        impl$(<$($lifetime),*>)? From<wgsl::$other$(<$($lifetime),*>)?> for $name$(<$($lifetime),*>)? {
-            #[inline]
-            fn from(value: wgsl::$other$(<$($lifetime),*>)?) -> Self {
-                Self::Wgsl(value)
-            }
-        }
-
-        impl$(<$($lifetime),*>)? From<$name$(<$($lifetime),*>)?> for $nop {
-            #[inline]
-            fn from(value: $name$(<$($lifetime),*>)?) -> Self {
-                match value {
-                    $name::None(ctx, ..) => ctx,
-                    _ => panic!("unsupported operation for nop backend"),
-                }
-            }
-        }
-
-        impl<'__a, $($($lifetime),*)?> From<&'__a $name$(<$($lifetime),*>)?> for &'__a $nop {
-            #[inline]
-            fn from(value: &'__a $name$(<$($lifetime),*>)?) -> Self {
-                match value {
-                    $name::None(ctx, ..) => ctx,
-                    _ => panic!("unsupported operation for WGSL backend"),
-                }
-            }
-        }
-
-        impl<'__a, $($($lifetime),*)?> From<&'__a mut $name$(<$($lifetime),*>)?> for &'__a mut $nop {
-            #[inline]
-            fn from(value: &'__a mut $name$(<$($lifetime),*>)?) -> Self {
-                match value {
-                    $name::None(ctx, ..) => ctx,
-                    _ => panic!("unsupported operation for WGSL backend"),
-                }
-            }
-        }
-
-        #[cfg(feature = "wgsl")]
-        impl$(<$($lifetime),*>)? From<$name$(<$($lifetime),*>)?> for wgsl::$other$(<$($lifetime),*>)? {
-            #[inline]
-            fn from(value: $name$(<$($lifetime),*>)?) -> Self {
-                match value {
-                    $name::Wgsl(ctx) => ctx,
-                    _ => panic!("unsupported operation for WGSL backend"),
-                }
-            }
-        }
-
-        #[cfg(feature = "wgsl")]
-        impl<'__a, $($($lifetime),*)?> From<&'__a $name$(<$($lifetime),*>)?> for &'__a wgsl::$other$(<$($lifetime),*>)? {
-            #[inline]
-            fn from(value: &'__a $name$(<$($lifetime),*>)?) -> Self {
-                match value {
-                    $name::Wgsl(ctx) => ctx,
-                    _ => panic!("unsupported operation for WGSL backend"),
-                }
-            }
-        }
-
-        #[cfg(feature = "wgsl")]
-        impl<'__a, $($($lifetime),*)?> From<&'__a mut $name$(<$($lifetime),*>)?> for &'__a mut wgsl::$other$(<$($lifetime),*>)? {
-            #[inline]
-            fn from(value: &'__a mut $name$(<$($lifetime),*>)?) -> Self {
-                match value {
-                    $name::Wgsl(ctx) => ctx,
-                    _ => panic!("unsupported operation for WGSL backend"),
-                }
-            }
-        }
+        impl_backend!(@backend $name, $nop$(<$($lifetime),*>)? => None, self, "nop");
+        impl_backend!(@backend $name, $wgsl$(<$($lifetime),*>)? => Wgsl, wgsl, "WGSL", "wgsl");
+        impl_backend!(@backend $name, $rocm$(<$($lifetime),*>)? => Rocm, rocm, "ROCm", "rocm");
     };
+
+    (@backend $on_name:ident$(<$($lifetime:lifetime),*>)?, $name:ident => $backend:ident, $module:ident, $backend_fmt:literal$(, $feature:literal)?$(,)?) => {
+        $(#[cfg(feature = $feature)])?
+        impl$(<$($lifetime),*>)? From<$module::$name$(<$($lifetime),*>)?> for $on_name$(<$($lifetime),*>)? {
+            #[inline]
+            fn from(value: $module::$name$(<$($lifetime),*>)?) -> Self {
+                Self::$backend(value)
+            }
+        }
+
+        $(#[cfg(feature = $feature)])?
+        impl$(<$($lifetime),*>)? From<$on_name$(<$($lifetime),*>)?> for $module::$name$(<$($lifetime),*>)? {
+            #[inline]
+            fn from(value: $on_name$(<$($lifetime),*>)?) -> Self {
+                match value {
+                    $on_name::$backend(ctx) => ctx,
+                    _ => panic!(concat!("unsupported operation for ", $backend_fmt, " backend")),
+                }
+            }
+        }
+
+        $(#[cfg(feature = $feature)])?
+        impl<'__a, $($($lifetime),*)?> From<&'__a $on_name$(<$($lifetime),*>)?> for &'__a $module::$name$(<$($lifetime),*>)? {
+            #[inline]
+            fn from(value: &'__a $on_name$(<$($lifetime),*>)?) -> Self {
+                match value {
+                    $on_name::$backend(ctx) => ctx,
+                    _ => panic!(concat!("unsupported operation for ", $backend_fmt, " backend")),
+                }
+            }
+        }
+
+        $(#[cfg(feature = $feature)])?
+        impl<'__a, $($($lifetime),*)?> From<&'__a mut $on_name$(<$($lifetime),*>)?> for &'__a mut $module::$name$(<$($lifetime),*>)? {
+            #[inline]
+            fn from(value: &'__a mut $on_name$(<$($lifetime),*>)?) -> Self {
+                match value {
+                    $on_name::$backend(ctx) => ctx,
+                    _ => panic!(concat!("unsupported operation for ", $backend_fmt, " backend")),
+                }
+            }
+        }
+    }
 }
+
+type Unit = ();
 
 impl_backend!(
     #[derive(Debug)]
     DynBuffer,
-    (),
-    Buffer
+    Unit,
+    Buffer,
+    Buffer,
 );
 
 impl GpuBufferBackend for DynBuffer {
@@ -500,6 +514,8 @@ impl GpuBufferBackend for DynBuffer {
             Self::None(_) => 0,
             #[cfg(feature = "wgsl")]
             Self::Wgsl(ctx) => ctx.size() as u32,
+            #[cfg(feature = "rocm")]
+            Self::Rocm(ctx) => ctx.size() as u32,
         }
     }
 
@@ -508,6 +524,8 @@ impl GpuBufferBackend for DynBuffer {
             Self::None(_) => 0,
             #[cfg(feature = "wgsl")]
             Self::Wgsl(ctx) => ctx.size_bytes(),
+            #[cfg(feature = "rocm")]
+            Self::Rocm(ctx) => ctx.size_bytes(),
         }
     }
 }
@@ -522,7 +540,12 @@ impl ToBuffer<Dynamic> for DynBuffer {
     }
 }
 
-impl_backend!(DynKernel, (), GpuKernel);
+impl_backend!(
+    DynKernel,
+    Unit,
+    GpuKernel,
+    Kernel,
+);
 
 impl GpuKernelBackend for DynKernel {
     impl_op! {
@@ -531,6 +554,15 @@ impl GpuKernelBackend for DynKernel {
     }
 }
 
-impl_backend!(DynSubmissionIndex, (), SubmissionIndex);
-impl_backend!(DynSchedule, (), Schedule);
-impl_backend!(DynMetaBuf, (), Buffer);
+impl_backend!(
+    DynSchedule,
+    Unit,
+    Schedule,
+    Graph,
+);
+impl_backend!(
+    DynMetaBuf,
+    Unit,
+    Buffer,
+    DevMappedAlloc,
+);

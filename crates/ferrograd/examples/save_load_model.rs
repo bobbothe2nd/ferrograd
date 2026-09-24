@@ -1,7 +1,7 @@
 use ferrograd::{
     dispatch::{
-        CompilationOptions, SimpleDType, DebugCompilationOptions, GpuContext, Graph, Metadata,
-        OptCompilationOptions,
+        CompilationOptions, DebugCompilationOptions, GpuContext, Graph, Metadata,
+        OptCompilationOptions, SimpleDType,
     },
     io::BpatHeader,
     nn::{MEAN_SQUARED_ERROR, Optim},
@@ -73,7 +73,9 @@ fn main() {
     assert!(meta.validate_meta(&meta_binding));
     let meta_binding = ctx.alloc_meta(&meta_binding);
 
-    let saved_tensors = ctx.alloc_tensors(&graph, &saved, meta_binding, &optim.state).unwrap();
+    let saved_tensors = ctx
+        .alloc_tensors(&graph, &saved, meta_binding, &optim.state)
+        .unwrap();
 
     let ir = graph.lower(meta, &options, &saved).unwrap();
     let kernels = ctx.compile(&ir, &options).unwrap();
@@ -84,15 +86,20 @@ fn main() {
 
     let tensor_start = Instant::now();
 
-    let in_tensors = ctx
-        .load_tensors(PATH)
-        .unwrap_or_else(|_| vec![
-            ctx.init_tensor_f32([M, K].to_vec(), &[A_VAL; (M * K) as usize]).unwrap(),
-            ctx.init_tensor_f32([K, N].to_vec(), &[B_VAL; (K * N) as usize]).unwrap(),
-            ctx.init_tensor_f32([H, M].to_vec(), &[C_VAL; (H * M) as usize]).unwrap(),
-            ctx.init_tensor_f32([N, H].to_vec(), &[D_VAL; (N * H) as usize]).unwrap(),
-            ctx.init_tensor_f32([H, H].to_vec(), &[E_VAL; (H * H) as usize]).unwrap(),
-        ]);
+    let in_tensors = ctx.load_tensors(PATH).unwrap_or_else(|_| {
+        vec![
+            ctx.init_tensor_f32([M, K].to_vec(), &[A_VAL; (M * K) as usize])
+                .unwrap(),
+            ctx.init_tensor_f32([K, N].to_vec(), &[B_VAL; (K * N) as usize])
+                .unwrap(),
+            ctx.init_tensor_f32([H, M].to_vec(), &[C_VAL; (H * M) as usize])
+                .unwrap(),
+            ctx.init_tensor_f32([N, H].to_vec(), &[D_VAL; (N * H) as usize])
+                .unwrap(),
+            ctx.init_tensor_f32([H, H].to_vec(), &[E_VAL; (H * H) as usize])
+                .unwrap(),
+        ]
+    });
 
     let tensor_elapsed = tensor_start.elapsed();
 
@@ -122,7 +129,8 @@ fn main() {
             let arr = [target; (H * H) as usize];
 
             ctx.init_tensor_f32(vec![H, H], &arr)
-        }.unwrap();
+        }
+        .unwrap();
 
         let monitor: GpuMonitor<Telemetry> = GpuMonitor::start(INTERVAL).unwrap();
 
@@ -131,11 +139,16 @@ fn main() {
             ctx.dispatch_loss(&mut schedule, &target).unwrap();
             ctx.dispatch_backward(&schedule).unwrap();
 
-            ctx.dispatch_optim(&mut schedule, &in_tensors[0], 0, &saved_tensors).unwrap();
-            ctx.dispatch_optim(&mut schedule, &in_tensors[1], 1, &saved_tensors).unwrap();
-            ctx.dispatch_optim(&mut schedule, &in_tensors[2], 2, &saved_tensors).unwrap();
-            ctx.dispatch_optim(&mut schedule, &in_tensors[3], 3, &saved_tensors).unwrap();
-            ctx.dispatch_optim(&mut schedule, &in_tensors[4], 4, &saved_tensors).unwrap();
+            ctx.dispatch_optim(&mut schedule, &in_tensors[0], 0, &saved_tensors)
+                .unwrap();
+            ctx.dispatch_optim(&mut schedule, &in_tensors[1], 1, &saved_tensors)
+                .unwrap();
+            ctx.dispatch_optim(&mut schedule, &in_tensors[2], 2, &saved_tensors)
+                .unwrap();
+            ctx.dispatch_optim(&mut schedule, &in_tensors[3], 3, &saved_tensors)
+                .unwrap();
+            ctx.dispatch_optim(&mut schedule, &in_tensors[4], 4, &saved_tensors)
+                .unwrap();
         }
 
         let telemetry = monitor.stop().unwrap();

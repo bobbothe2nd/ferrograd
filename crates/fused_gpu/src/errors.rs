@@ -44,6 +44,16 @@ impl From<Error> for Error<GraphErrorContext<'_>> {
     }
 }
 
+impl From<Error<GraphErrorContext<'_>>> for Error {
+    fn from(err: Error<GraphErrorContext<'_>>) -> Self {
+        Self {
+            msg: err.msg,
+            kind: err.kind,
+            ctx: (),
+        }
+    }
+}
+
 impl Display for Error {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         write!(f, "{}: {}", self.kind, self.msg)

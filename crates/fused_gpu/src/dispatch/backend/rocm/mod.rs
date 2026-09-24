@@ -1,13 +1,21 @@
 #![allow(unsafe_code)]
 
 use briny::raw::cast::cast_slice;
-use rocm_rt::{
+use rocm_rt::shared::MatrixKind;
+pub use rocm_rt::{
     hip::{
-        HipError, device::Device, memory::{Buffer, DevMapped, DevMappedAlloc}, module::{Func, LaunchConfig}, stream::Stream,
-    }, hiprtc::{
+        HipError,
+        device::Device,
+        graph::{Graph, GraphInstantiateFlags, KernelParams},
+        memory::{Buffer, DevMapped, DevMappedAlloc},
+        module::{Func, LaunchConfig},
+        stream::Stream,
+    },
+    hiprtc::{
         HiprtcError,
         program::{CompileOptions, Hsaco},
-    }, shared::GfxVersion,
+    },
+    shared::GfxVersion,
 };
 
 use crate::{
@@ -16,11 +24,12 @@ use crate::{
         TargetCompilationOptions, TargetFlags,
         backend::{
             MetaId, NodeId, Param,
-            kernel::{Dependencies, RawKernel, Redirect},
+            kernel::{Dependencies, RawKernel, Redirect, topo_sort},
             rocm::generate::generate_hip,
         },
     },
     errors::{Error, ErrorKind},
+    tensor::{build_dims, calc_grid},
 };
 
 mod generate;
@@ -35,6 +44,11 @@ macro_rules! map_err {
     };
 }
 
+pub fn is_rocm_present() -> bool {
+    rocm_rt::is_amdhip64_present() && rocm_rt::is_hiprtc_present()
+}
+
+#[derive(Debug)]
 pub struct GpuContext {
     device: Device,
     arch: GfxVersion,
@@ -62,7 +76,7 @@ impl GpuBackend for GpuContext {
     type Buffer = Buffer;
     type MetaBuf = DevMappedAlloc;
     type Kernel = Kernel;
-    type Schedule = Schedule;
+    type Schedule = Graph;
 
     fn alloc(&self, len: u32) -> Result<Self::Buffer, Error> {
         Ok(map_err!(
@@ -97,7 +111,7 @@ impl GpuBackend for GpuContext {
         params: &[Param],
         options: &CompilationOptions,
     ) -> Result<Self::Kernel, Error> {
-        let hip = generate_hip(src, params, options);
+        let hip = generate_hip(src, params, options)?;
 
         let opts = CompileOptions {
             opt_level: Some(3),
@@ -124,8 +138,16 @@ impl GpuBackend for GpuContext {
     }
 
     fn target_spec(&self) -> TargetCompilationOptions {
+        let mut flags = TargetFlags::empty();
+
+        let capabilities = self.arch.matrix_capabilities();
+
+        if capabilities.kind != MatrixKind::None {
+            flags |= TargetFlags::LIN_ACC;
+        }
+
         TargetCompilationOptions {
-            flags: TargetFlags::empty(),
+            flags,
         }
     }
 
@@ -134,9 +156,7 @@ impl GpuBackend for GpuContext {
 
         let host_buf = map_err!(DevMapped::new(out), "failed to allocate host buffer")?;
 
-        map_err!(buffer.copy_to_host(&host_buf, 0, 0, len), "failed to copy")?;
-
-        Ok(())
+        map_err!(buffer.copy_to_host(&host_buf, 0, 0, len), "failed to copy")
     }
 
     fn dispatch_kernel(
@@ -165,32 +185,84 @@ impl GpuBackend for GpuContext {
                     }
                 ),
                 "failed to launch kernel"
-            )?;
+            )
         }
-
-        Ok(())
     }
 
-    fn dispatch_schedule(&self, _schedule: &Self::Schedule) -> Result<(), Error> {
-        Ok(())
+    fn dispatch_schedule(&self, graph: &Self::Schedule) -> Result<(), Error> {
+        unsafe { map_err!(self.stream.launch_graph(graph), "failed to launch graph") }
     }
 
     fn schedule(
         &self,
-        _kernels: Vec<Dependencies<Redirect<(Self::Kernel, NodeId, &[bool])>>>,
-        _bindings: &[&Self::Buffer],
-        _meta: &[u32],
-        _meta_buf: &Self::MetaBuf,
+        kernels: Vec<Dependencies<Redirect<(Self::Kernel, NodeId, &[bool])>>>,
+        bindings: &[&Self::Buffer],
+        meta: &[u32],
+        meta_buf: &Self::MetaBuf,
     ) -> Result<Self::Schedule, Error> {
-        Err(Error {
-            msg: "using nop backend",
-            kind: ErrorKind::UnsupportedFeature,
-            ctx: (),
-        })
+        let kernels = topo_sort(&kernels)?;
+
+        let mut graph = map_err!(
+            Graph::new(GraphInstantiateFlags::DeviceLaunch),
+            "failed to instantiate graph"
+        )?;
+
+        let mut nodes = vec![None; kernels.len()];
+
+        for (idx, kernel) in kernels.iter().enumerate() {
+            let dep = kernel
+                .dep
+                .iter()
+                .filter_map(|dep| nodes[*dep])
+                .collect::<Vec<_>>();
+            let kernel = match &kernel.val {
+                Redirect::Redirected(kernel_id) => match &kernels[*kernel_id].val {
+                    Redirect::Redirected(_) => {
+                        return Err(Error {
+                            msg: "double redirection or loop encountered in kernel resolution",
+                            kind: ErrorKind::UnresolvedRedirection,
+                            ctx: (),
+                        });
+                    }
+                    Redirect::Unmasked(func) => func.0.clone(),
+                },
+                Redirect::Unmasked(func) => func.0.clone(),
+            };
+
+            let mut kernel_args = Vec::with_capacity(1 + bindings.len());
+
+            kernel_args.push((&raw const *meta_buf) as *mut u8);
+
+            for binding in bindings {
+                kernel_args.push((&raw const **binding) as *mut u8);
+            }
+
+            let iter_space = build_dims(kernel.iteration_space(), meta);
+            let grid = calc_grid(&iter_space, *kernel.block());
+
+            let params = KernelParams::new(
+                &kernel.func,
+                &mut kernel_args,
+                LaunchConfig {
+                    grid,
+                    block: kernel.block,
+                },
+            );
+
+            nodes[idx].replace(map_err!(
+                graph.add_kernel_node(&dep, &params),
+                "failed to add kernel node to graph"
+            )?);
+        }
+
+        Ok(graph)
     }
 
     fn is_ready(&self) -> Result<bool, Error> {
-        map_err!(self.stream.query(), "failed to query stream for completion")
+        map_err!(
+            self.stream.is_ready(),
+            "failed to query stream for completion"
+        )
     }
 
     fn sync(&self) -> Result<(), Error> {
@@ -204,29 +276,29 @@ impl GpuBackend for GpuContext {
         src_off: u32,
         dst_off: u32,
     ) -> Result<(), Error> {
-        let host_buf = unsafe {
-            DevMapped::from_slice(data)
-        };
+        let host_buf = unsafe { DevMapped::from_slice(data) };
 
         unsafe {
             map_err!(host_buf.map(), "failed to register data in upload")?;
         }
 
-        map_err!(host_buf.copy_to_dev(buffer, src_off as usize, dst_off as usize, data.len()), "failed to copy host to GPU device")?;
-
-        Ok(())
+        map_err!(
+            host_buf.copy_to_dev(buffer, src_off as usize, dst_off as usize, data.len()),
+            "failed to copy host to GPU device"
+        )
     }
 
     fn copy(&self, src: &Self::Buffer, dst: &Self::Buffer) -> Result<(), Error> {
-        map_err!(src.copy_to(dst, 0, 0, src.size() as usize), "failed to copy GPU buffer")?;
-
-        Ok(())
+        map_err!(
+            src.copy_to(dst, 0, 0, src.size() as usize),
+            "failed to copy GPU buffer"
+        )
     }
 }
 
 impl GpuBufferBackend for Buffer {
     fn size(&self) -> u32 {
-        self.size() / 4
+        self.size().div_ceil(4)
     }
 
     fn size_bytes(&self) -> u32 {
@@ -234,6 +306,7 @@ impl GpuBufferBackend for Buffer {
     }
 }
 
+#[derive(Clone)]
 pub struct Kernel {
     block: [u32; 3],
     iter_space: Vec<MetaId>,
@@ -249,8 +322,6 @@ impl GpuKernelBackend for Kernel {
         &self.iter_space
     }
 }
-
-pub struct Schedule {}
 
 impl From<HipError> for ErrorKind {
     fn from(value: HipError) -> Self {

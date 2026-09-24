@@ -41,17 +41,8 @@ pub struct TargetCompilationOptions {
 bitflags::bitflags! {
     #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
     pub struct TargetFlags: u8 {
-        /// Support for linear algebra accelerator (e.g. tensor core via `wmma`)
+        /// Support for linear algebra accelerator (e.g. matrix core via `wmma`/`mfma`)
         const LIN_ACC = 1 << 0;
-
-        /// Links a BLAS library (e.g. `cuBLAS`)
-        const BLAS_LIB = 1 << 1;
-
-        /// Support for asynchronous memory load
-        const ASYNC_MEM_LOAD = 1 << 2;
-
-        /// Support for asynchronous memory store
-        const ASYNC_MEM_STORE = 1 << 3;
     }
 }
 

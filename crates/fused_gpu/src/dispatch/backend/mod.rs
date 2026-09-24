@@ -12,6 +12,8 @@ use crate::{
     errors::{Error, ErrorKind, GraphErrorContext},
 };
 
+pub mod codegen;
+
 pub mod kernel;
 
 #[cfg(feature = "wgsl")]
@@ -58,12 +60,12 @@ impl GpuKernelBackend for () {
 pub struct NopGpuContext;
 
 impl NopGpuContext {
-    pub fn new() -> impl Future<Output = Result<Self, Error>> {
-        core::future::ready(Err(Error {
+    pub fn new() -> Result<Self, Error> {
+        Err(Error {
             msg: "using nop backend",
             kind: ErrorKind::UnsupportedFeature,
             ctx: (),
-        }))
+        })
     }
 }
 

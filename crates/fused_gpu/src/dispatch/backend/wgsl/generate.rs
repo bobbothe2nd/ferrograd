@@ -1,10 +1,9 @@
 use crate::{
     dispatch::backend::{
-        Axis, DType, Op, Param, ParamTy, SimpleDType, ValueId, ValueState, kernel::RawKernel,
-    },
-    errors::{Error, ErrorKind},
+        Op, Param, ParamTy, SimpleDType, ValueId, ValueState, codegen::{self, def_var_wgsl, newline, tab}, kernel::RawKernel,
+    }, errors::{Error, ErrorKind},
 };
-use core::{fmt::Write, str::FromStr};
+use core::fmt::Write;
 use std::{string::String, vec::Vec};
 
 pub use wgpu::{BindGroupLayoutEntry, BindingType, BufferBindingType, ShaderStages};
@@ -40,7 +39,7 @@ pub(super) fn generate_wgsl(
     params: &[Param],
     pretty_print: bool,
 ) -> Result<String, Error> {
-    let mut out = String::from_str("enable f16;").map_err(|_| Error {
+    let mut out = "enable f16;".parse().map_err(|_| Error {
         msg: "failed to copy &'static str to String",
         kind: ErrorKind::InternalError,
         ctx: (),
@@ -58,61 +57,6 @@ pub(super) fn generate_wgsl(
     }
 
     Ok(out)
-}
-
-#[inline]
-const fn get_axis(axis: Axis) -> &'static str {
-    match axis {
-        Axis::X => "x",
-        Axis::Y => "y",
-        Axis::Z => "z",
-    }
-}
-
-#[inline]
-const fn get_dtype(dtype: DType) -> Result<&'static str, Error> {
-    let DType::Simple(dtype) = dtype else {
-        return Err(Error {
-            msg: "MMA not supported",
-            kind: ErrorKind::UnsupportedFeature,
-            ctx: (),
-        });
-    };
-
-    get_simple_dtype(dtype)
-}
-
-#[inline]
-const fn get_simple_dtype(dtype: SimpleDType) -> Result<&'static str, Error> {
-    match dtype {
-        SimpleDType::F64 => Ok("f64"),
-        SimpleDType::F32 => Ok("f32"),
-        SimpleDType::F16 => Ok("f16"),
-        SimpleDType::BF16 => Err(Error {
-            msg: "bf16 not supported",
-            kind: ErrorKind::UnsupportedFeature,
-            ctx: (),
-        }),
-        SimpleDType::Bool => Ok("bool"),
-        SimpleDType::I32 => Ok("i32"),
-        SimpleDType::U32 => Ok("u32"),
-    }
-}
-
-#[inline]
-fn newline(pretty_print: bool, out: &mut String, nesting: usize) {
-    if pretty_print {
-        let _ = write!(out, "\n{}", "  ".repeat(nesting));
-    } else {
-        let _ = write!(out, " ");
-    }
-}
-
-#[inline]
-fn tab(pretty_print: bool, out: &mut String) {
-    if pretty_print {
-        let _ = write!(out, "  ");
-    }
 }
 
 #[inline]
@@ -154,7 +98,7 @@ fn emit_bindings(
             let _ = write!(
                 out,
                 "@group(0) @binding({pid}) {var_type} param{pid}: array<{}>;",
-                get_simple_dtype(p.dtype)?,
+                p.dtype.fmt_wgsl()?,
             );
         }
     }
@@ -166,7 +110,7 @@ fn emit_bindings(
         let _ = write!(
             out,
             "var<workgroup> shared{i}: array<{}, ({})>;",
-            get_simple_dtype(s.dtype)?,
+            s.dtype.fmt_wgsl()?,
             s.size
         );
     }
@@ -241,36 +185,7 @@ fn process_op(
     match op {
         Op::Nop => {}
 
-        Op::DefineVar { id } => {
-            let val = &kernel.values[*id];
-            match val.state {
-                ValueState::Masked | ValueState::Inline => {}
-                ValueState::Const => {
-                    let _ = write!(out, "const v{id}: {}", get_dtype(val.dtype)?);
-
-                    if let Some(op) = &val.init {
-                        let _ = out.write_str(" = ");
-                        process_op(out, op, nesting, kernel)?;
-                    }
-
-                    let _ = out.write_char(';');
-                }
-                var => {
-                    if var == ValueState::Immut {
-                        let _ = write!(out, "let v{id}: {}", get_dtype(val.dtype)?);
-                    } else {
-                        let _ = write!(out, "var v{id}: {}", get_dtype(val.dtype)?);
-                    }
-
-                    if let Some(op) = &val.init {
-                        let _ = out.write_str(" = ");
-                        process_op(out, op, nesting, kernel)?;
-                    }
-
-                    let _ = out.write_char(';');
-                }
-            }
-        }
+        Op::DefineVar { id } => def_var_wgsl(out, nesting, *id, kernel, process_op)?,
 
         Op::OverwriteVar { id, val } => {
             let _ = write!(out, "v{id} = {};", render_val(*val, kernel)?);
@@ -391,15 +306,15 @@ fn process_op(
         }
 
         Op::LocalId { axis } => {
-            let _ = write!(out, "lid.{}", get_axis(*axis));
+            let _ = write!(out, "lid.{axis}");
         }
 
         Op::BlockId { axis } => {
-            let _ = write!(out, "bid.{}", get_axis(*axis));
+            let _ = write!(out, "bid.{axis}");
         }
 
         Op::GlobalId { axis } => {
-            let _ = write!(out, "gid.{}", get_axis(*axis));
+            let _ = write!(out, "gid.{axis}");
         }
 
         Op::Add { a, b } => {
@@ -793,18 +708,5 @@ fn process_op(
 }
 
 fn render_val(id: ValueId, kernel: &RawKernel) -> Result<String, Error> {
-    let mut out = String::new();
-    let val = &kernel.values[id];
-    match val.state {
-        ValueState::Inline => {
-            if let Some(op) = &val.init {
-                process_op(&mut out, op, &mut 0, kernel)?;
-            }
-        }
-        ValueState::Masked => {}
-        _ => {
-            let _ = write!(out, "v{id}");
-        }
-    }
-    Ok(out)
+    codegen::render_val(id, kernel, process_op)
 }
