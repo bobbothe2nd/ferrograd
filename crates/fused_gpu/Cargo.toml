@@ -30,9 +30,11 @@ log = "0.4.34"
 
 [dependencies.rocm-rt]
 path = "../../../rocm/crates/rocm-rt"
+version = "0.1.0"
 features = [
   "dynamic-loading",
   "std",
+  "log",
   "hip",
   "hiprtc",
 ]

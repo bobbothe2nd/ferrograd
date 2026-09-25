@@ -175,12 +175,46 @@ pub fn def_var_c<F>(
     kernel: &RawKernel,
     process_op: F,
 ) -> Result<(), Error>
-where 
+where
     F: FnOnce(&mut String, &Op, &mut usize, &RawKernel) -> Result<(), Error>,
 {
-    let _ = (out, nesting, id, kernel, process_op);
+    let val = &kernel.values[id];
 
-    todo!()
+    match val.state {
+        ValueState::Masked | ValueState::Inline => {}
+
+        ValueState::Const => {
+            let _ = write!(
+                out,
+                "const {} v{id}",
+                val.dtype.fmt_c()
+            );
+
+            if let Some(op) = &val.init {
+                let _ = out.write_str(" = ");
+                process_op(out, op, nesting, kernel)?;
+            }
+
+            let _ = out.write_char(';');
+        }
+
+        _ => {
+            let _ = write!(
+                out,
+                "{} v{id}",
+                val.dtype.fmt_c()
+            );
+
+            if let Some(op) = &val.init {
+                let _ = out.write_str(" = ");
+                process_op(out, op, nesting, kernel)?;
+            }
+
+            let _ = out.write_char(';');
+        }
+    }
+
+    Ok(())
 }
 
 pub fn render_val<F>(id: ValueId, kernel: &RawKernel, process_op: F) -> Result<String, Error>

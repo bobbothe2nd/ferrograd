@@ -1,13 +1,16 @@
+use log::debug;
+
 use crate::{dispatch::{
     CompilationOptions, DebugCompilationOptions, backend::{
-        Op, Param, ParamTy, SharedAlloc, ValueId, codegen::{self, def_var_c, newline}, kernel::RawKernel,
+        DType, Op, Param, ParamTy, SharedAlloc, SimpleDType, ValueId, codegen::{self, def_var_c, newline}, kernel::RawKernel,
     },
-}, errors::{Error, ErrorKind}};
+}, errors::Error};
 
 use core::fmt::Write;
 
 pub(super) fn generate_hip(src: &RawKernel, params: &[Param], options: &CompilationOptions) -> Result<String, Error> {
     let Ok(mut out) = r#"
+#include <cstdint>
 #include <hip/hip_bfloat16.h>
 #include <hip/hip_fp16.h>
 #include <hip/hip_runtime.h>
@@ -15,7 +18,7 @@ pub(super) fn generate_hip(src: &RawKernel, params: &[Param], options: &Compilat
 
     let pretty_print = options.debug.contains(DebugCompilationOptions::PRETTY_PRINT_IR);
 
-    out.push_str("extern \"C\" __global__\nvoid n(");
+    out.push_str("extern \"C\" __global__\nvoid kernel(");
 
     gen_args(&mut out, params);
 
@@ -23,18 +26,20 @@ pub(super) fn generate_hip(src: &RawKernel, params: &[Param], options: &Compilat
 
     gen_shared(&mut out, &src.shared, pretty_print);
 
-    let mut nesting = 0;
+    let mut nesting = 1;
 
     for op in &src.ops {
-        newline(pretty_print, &mut out, 0);
+        newline(pretty_print, &mut out, nesting);
 
         process_op(&mut out, op, &mut nesting, src)?;
     }
 
+    newline(pretty_print, &mut out, 0);
+
     out.push('}');
 
     if pretty_print {
-        log::log!(log::Level::Debug, "{out}");
+        debug!("generated kernel:\n{out}");
     }
 
     Ok(out)
@@ -54,14 +59,18 @@ fn gen_shared(out: &mut String, shared: &[SharedAlloc], pretty_print: bool) {
 }
 
 fn gen_args(out: &mut String, params: &[Param]) {
-    for param in params {
+    for (i, param) in params.iter().enumerate() {
+        if i != 0 {
+            let _ = out.write_str(", ");
+        }
+
         let read_only = if param.ty == ParamTy::ReadWrite {
             ""
         } else {
             "const "
         };
 
-        let _ = write!(out, "{}{} *param{}, ", read_only, param.dtype.fmt_c(), param.pid);
+        let _ = write!(out, "{}{} *param{}", read_only, param.dtype.fmt_c(), param.pid);
     }
 }
 
@@ -109,19 +118,19 @@ fn process_op(
         }
 
         Op::ConstF64 { value } => {
-            let _ = write!(out, "{value}");
+            let _ = write!(out, "{value:?}");
         }
 
         Op::ConstF32 { value } => {
-            let _ = write!(out, "{value}f");
+            let _ = write!(out, "{value:?}f");
         }
 
         Op::ConstF16 { value } => {
-            let _ = write!(out, "__float2half({value}f)");
+            let _ = write!(out, "__float2half({value:?}f)");
         }
 
         Op::ConstBf16 { value } => {
-            let _ = write!(out, "__float2bfloat16({value}f)");
+            let _ = write!(out, "__float2bfloat16({value:?}f)");
         }
 
         Op::ConstU32 { value } => {
@@ -275,9 +284,14 @@ fn process_op(
         }
 
         Op::Fma { a, b, c } => {
+            let symbol = if kernel.values[*a].dtype == DType::Simple(SimpleDType::F32) {
+                "fmaf"
+            } else {
+                "fma"
+            }; 
             let _ = write!(
                 out,
-                "fma({}, {}, {})",
+                "{symbol}({}, {}, {})",
                 render_val(*a, kernel)?,
                 render_val(*b, kernel)?,
                 render_val(*c, kernel)?
@@ -553,6 +567,7 @@ fn process_op(
 
         Op::StartScope => {
             let _ = write!(out, "{{");
+            *nesting += 1;
         }
 
         Op::EndScope => {

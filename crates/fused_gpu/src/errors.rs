@@ -136,6 +136,7 @@ pub enum ErrorKind {
     LaunchFailure,
     PeerAccessError,
     UnresolvedSymbol,
+    LinkingError,
 }
 
 impl Display for ErrorKind {
@@ -174,6 +175,7 @@ impl Display for ErrorKind {
             Self::LaunchFailure => f.write_str("launch failure"),
             Self::PeerAccessError => f.write_str("peer access error"),
             Self::UnresolvedSymbol => f.write_str("unresolved symbol"),
+            Self::LinkingError => f.write_str("linking error"),
         }
     }
 }

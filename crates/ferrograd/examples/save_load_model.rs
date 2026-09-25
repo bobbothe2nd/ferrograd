@@ -7,6 +7,7 @@ use ferrograd::{
     nn::{MEAN_SQUARED_ERROR, Optim},
 };
 use gpu_telemetry::monitor::{GpuMonitor, telemetry::Telemetry};
+use log::Level;
 use rand_core::{Rng, SeedableRng};
 use rand_xorshift::XorShiftRng;
 use std::time::{Duration, Instant};
@@ -31,6 +32,8 @@ fn main() {
     const C_VAL: f32 = 0.01;
     const D_VAL: f32 = 0.05;
     const E_VAL: f32 = 1.0;
+
+    stderrlog::new().verbosity(Level::Debug).init().unwrap();
 
     let mut meta = Metadata::new();
     let m = meta.new_field();
@@ -66,7 +69,7 @@ fn main() {
     let options = CompilationOptions {
         target: ctx.detect_target(),
         opt: OptCompilationOptions::default(),
-        debug: DebugCompilationOptions::empty(),
+        debug: DebugCompilationOptions::PRETTY_PRINT_IR,
     };
 
     let meta_binding = [LR.to_bits(), M, N, K, H];

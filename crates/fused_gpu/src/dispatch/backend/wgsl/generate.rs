@@ -6,6 +6,7 @@ use crate::{
 use core::fmt::Write;
 use std::{string::String, vec::Vec};
 
+use log::debug;
 pub use wgpu::{BindGroupLayoutEntry, BindingType, BufferBindingType, ShaderStages};
 
 #[inline]
@@ -53,7 +54,7 @@ pub(super) fn generate_wgsl(
     emit_entry(kernel, &mut out, pretty_print)?;
 
     if pretty_print {
-        log::log!(log::Level::Debug, "{out}");
+        debug!("generated kernel:\n{out}");
     }
 
     Ok(out)

@@ -116,7 +116,7 @@ impl GpuBackend for GpuContext {
         let opts = CompileOptions {
             opt_level: Some(3),
             fast_math: Some(true),
-            name: None,
+            name: Some(c"kernel"),
             options: &[],
             defines: &[],
             include_paths: &[],
@@ -126,8 +126,8 @@ impl GpuBackend for GpuContext {
         let hsaco = map_err!(Hsaco::compile(hip, &opts), "failed to compile HSACO binary")?;
         let module = map_err!(hsaco.load(), "failed to load module from binary")?;
         let func = map_err!(
-            module.get_func_c(c"main"),
-            "failed to get function from module"
+            module.get_func_c(c"kernel"),
+            "failed to get `kernel` function from module"
         )?;
 
         Ok(Kernel {
@@ -403,7 +403,20 @@ impl From<HipError> for ErrorKind {
 }
 
 impl From<HiprtcError> for ErrorKind {
-    fn from(_value: HiprtcError) -> Self {
-        Self::InternalError
+    fn from(value: HiprtcError) -> Self {
+        match value {
+            HiprtcError::BuiltinOperationFailure
+            | HiprtcError::Compilation
+            | HiprtcError::InternalError
+            | HiprtcError::NameExpressionNotValid
+            | HiprtcError::NoLoweredNamesBeforeCompilation
+            | HiprtcError::NoNameExpressionsAfterCompilation
+            | HiprtcError::ProgramCreationFailure => Self::InternalError,
+            HiprtcError::OutOfMemory => Self::OutOfMemory,
+            HiprtcError::Linking => Self::LinkingError,
+            HiprtcError::InvalidInput
+            | HiprtcError::InvalidOption
+            | HiprtcError::InvalidProgram => Self::InvalidArgument,
+        }
     }
 }
