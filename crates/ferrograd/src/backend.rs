@@ -254,22 +254,22 @@ impl<B: GpuBackend> GpuContext<B> {
     }
 
     #[inline]
-    pub fn init_tensor_bf16(&self, shape: Vec<u32>, data: &[bf16]) -> Result<Tensor<B>, Error> {
+    pub fn init_tensor_bf16(&self, shape: &[u32], data: &[bf16]) -> Result<Tensor<B>, Error> {
         self.0.init_tensor_bf16(shape, data)
     }
 
     #[inline]
-    pub fn init_tensor_f16(&self, shape: Vec<u32>, data: &[f16]) -> Result<Tensor<B>, Error> {
+    pub fn init_tensor_f16(&self, shape: &[u32], data: &[f16]) -> Result<Tensor<B>, Error> {
         self.0.init_tensor_f16(shape, data)
     }
 
     #[inline]
-    pub fn init_tensor_f32(&self, shape: Vec<u32>, data: &[f32]) -> Result<Tensor<B>, Error> {
+    pub fn init_tensor_f32(&self, shape: &[u32], data: &[f32]) -> Result<Tensor<B>, Error> {
         self.0.init_tensor_f32(shape, data)
     }
 
     #[inline]
-    pub fn init_tensor_f64(&self, shape: Vec<u32>, data: &[f64]) -> Result<Tensor<B>, Error> {
+    pub fn init_tensor_f64(&self, shape: &[u32], data: &[f64]) -> Result<Tensor<B>, Error> {
         self.0.init_tensor_f64(shape, data)
     }
 
@@ -558,7 +558,7 @@ impl_backend!(
     DynSchedule,
     Unit,
     Schedule,
-    Graph,
+    Schedule,
 );
 impl_backend!(
     DynMetaBuf,

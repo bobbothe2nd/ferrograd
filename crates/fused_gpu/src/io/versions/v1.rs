@@ -197,7 +197,7 @@ macro_rules! impl_load {
                         ctx: SerialTensorError::FailedFileIo,
                     })?;
 
-                tensors.push(ctx.$init(shape, &data).map_err(|_| Error {
+                tensors.push(ctx.$init(&shape, &data).map_err(|_| Error {
                     msg: "unexpected EOF",
                     kind: ErrorKind::SerializationError,
                     ctx: SerialTensorError::FailedFileIo,
@@ -253,13 +253,7 @@ macro_rules! impl_load {
                         ctx: SerialTensorError::FailedFileIo,
                     })?;
 
-                tensor.shape = shape;
-
-                ctx.sync().map_err(|err| Error {
-                    msg: err.msg,
-                    kind: err.kind,
-                    ctx: SerialTensorError::Unrelated,
-                })?;
+                tensor.shape = shape.into_boxed_slice();
 
                 ctx.upload(tensor, &data, 0, 0).map_err(|err| Error {
                     msg: err.msg,

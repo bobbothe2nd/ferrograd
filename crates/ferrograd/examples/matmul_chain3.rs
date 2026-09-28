@@ -24,7 +24,6 @@ fn model_runtime(ctx: &GpuContext, schedule: &Schedule) {
 
         for _ in 0..iters {
             ctx.dispatch_forward(schedule).unwrap();
-
             ctx.dispatch_backward(schedule).unwrap();
         }
 
@@ -113,15 +112,15 @@ fn main() {
     let tensor_start = Instant::now();
 
     let in_tensors = [
-        ctx.init_tensor_f32([M, K].to_vec(), &[A_VAL; (M * K) as usize])
+        ctx.init_tensor_f32(&[M, K], &[A_VAL; (M * K) as usize])
             .unwrap(),
-        ctx.init_tensor_f32([K, N].to_vec(), &[B_VAL; (K * N) as usize])
+        ctx.init_tensor_f32(&[K, N], &[B_VAL; (K * N) as usize])
             .unwrap(),
-        ctx.init_tensor_f32([H, M].to_vec(), &[C_VAL; (H * M) as usize])
+        ctx.init_tensor_f32(&[H, M], &[C_VAL; (H * M) as usize])
             .unwrap(),
-        ctx.init_tensor_f32([N, H].to_vec(), &[D_VAL; (N * H) as usize])
+        ctx.init_tensor_f32(&[N, H], &[D_VAL; (N * H) as usize])
             .unwrap(),
-        ctx.init_tensor_f32([H, H].to_vec(), &[E_VAL; (H * H) as usize])
+        ctx.init_tensor_f32(&[H, H], &[E_VAL; (H * H) as usize])
             .unwrap(),
     ];
 

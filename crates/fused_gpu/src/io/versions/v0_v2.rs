@@ -187,7 +187,7 @@ macro_rules! impl_load {
                         ctx: SerialTensorError::FailedFileIo,
                     })?;
 
-                tensors.push(ctx.$init(shape, &data).map_err(|_| Error {
+                tensors.push(ctx.$init(&shape, &data).map_err(|_| Error {
                     msg: "unexpected EOF",
                     kind: ErrorKind::SerializationError,
                     ctx: SerialTensorError::FailedFileIo,
@@ -243,13 +243,7 @@ macro_rules! impl_load {
                         ctx: SerialTensorError::FailedFileIo,
                     })?;
 
-                tensor.shape = shape;
-
-                ctx.sync().map_err(|err| Error {
-                    msg: err.msg,
-                    kind: err.kind,
-                    ctx: SerialTensorError::Unrelated,
-                })?;
+                tensor.shape = shape.into_boxed_slice();
 
                 ctx.upload(tensor, &data, 0, 0).map_err(|err| Error {
                     msg: err.msg,
@@ -426,8 +420,8 @@ mod tests {
         let data2 = [f64::MIN, -1.0, f64::MAX, 42.5];
 
         let tensors = vec![
-            ctx.init_tensor_f64(shape1.to_vec(), &data1).unwrap(),
-            ctx.init_tensor_f64(shape2.to_vec(), &data2).unwrap(),
+            ctx.init_tensor_f64(&shape1, &data1).unwrap(),
+            ctx.init_tensor_f64(&shape2, &data2).unwrap(),
         ];
 
         let path = temp_path("v0_f64");
@@ -454,8 +448,8 @@ mod tests {
         let data2 = [f32::MIN, -1.0, f32::MAX, 42.5];
 
         let tensors = vec![
-            ctx.init_tensor_f32(shape1.to_vec(), &data1).unwrap(),
-            ctx.init_tensor_f32(shape2.to_vec(), &data2).unwrap(),
+            ctx.init_tensor_f32(&shape1, &data1).unwrap(),
+            ctx.init_tensor_f32(&shape2, &data2).unwrap(),
         ];
 
         let path = temp_path("v2_f32");
@@ -489,8 +483,8 @@ mod tests {
         let data2 = [f16::MIN, f16::from_f32(-1.0), f16::MAX, f16::from_f32(42.5)];
 
         let tensors = vec![
-            ctx.init_tensor_f16(shape1.to_vec(), &data1).unwrap(),
-            ctx.init_tensor_f16(shape2.to_vec(), &data2).unwrap(),
+            ctx.init_tensor_f16(&shape1, &data1).unwrap(),
+            ctx.init_tensor_f16(&shape2, &data2).unwrap(),
         ];
 
         let path = temp_path("v2_f16");
@@ -529,8 +523,8 @@ mod tests {
         ];
 
         let tensors = vec![
-            ctx.init_tensor_bf16(shape1.to_vec(), &data1).unwrap(),
-            ctx.init_tensor_bf16(shape2.to_vec(), &data2).unwrap(),
+            ctx.init_tensor_bf16(&shape1, &data1).unwrap(),
+            ctx.init_tensor_bf16(&shape2, &data2).unwrap(),
         ];
 
         let path = temp_path("v2_bf16");

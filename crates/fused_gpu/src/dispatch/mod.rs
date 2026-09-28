@@ -520,7 +520,7 @@ impl<B: GpuBackend> GpuContext<B> {
 
         let node_shape = &graph.nodes[graph.nodes.len() - 1].shape;
         let node_dtype = &graph.nodes[graph.nodes.len() - 1].dtype;
-        let shape = build_dims(node_shape, meta);
+        let shape = build_dims(node_shape, meta).into_boxed_slice();
         let len = shape.iter().product::<u32>() * node_dtype.size() as u32;
 
         let forward_out = self.inner.alloc(len)?;
@@ -541,13 +541,13 @@ impl<B: GpuBackend> GpuContext<B> {
         })
     }
 
-    pub fn new_tensor<const N: u32>(&self, shape: Vec<u32>) -> Result<Tensor<B>, Error> {
+    pub fn new_tensor<const N: u32>(&self, shape: &[u32]) -> Result<Tensor<B>, Error> {
         let len = shape.iter().product::<u32>() * const { N / 8 };
         let data = gpu_alloc(&self.inner, len)?;
-        Ok(Tensor { shape, data })
+        Ok(Tensor { shape: shape.to_vec().into_boxed_slice(), data })
     }
 
-    pub fn init_tensor_f64(&self, shape: Vec<u32>, data: &[f64]) -> Result<Tensor<B>, Error> {
+    pub fn init_tensor_f64(&self, shape: &[u32], data: &[f64]) -> Result<Tensor<B>, Error> {
         debug_assert_eq!(
             shape.iter().product::<u32>(),
             data.len() as u32,
@@ -555,10 +555,10 @@ impl<B: GpuBackend> GpuContext<B> {
         );
 
         let data = gpu_alloc_init(&self.inner, data)?;
-        Ok(Tensor { shape, data })
+        Ok(Tensor { shape: shape.to_vec().into_boxed_slice(), data })
     }
 
-    pub fn init_tensor_f32(&self, shape: Vec<u32>, data: &[f32]) -> Result<Tensor<B>, Error> {
+    pub fn init_tensor_f32(&self, shape: &[u32], data: &[f32]) -> Result<Tensor<B>, Error> {
         debug_assert_eq!(
             shape.iter().product::<u32>(),
             data.len() as u32,
@@ -566,10 +566,10 @@ impl<B: GpuBackend> GpuContext<B> {
         );
 
         let data = gpu_alloc_init(&self.inner, data)?;
-        Ok(Tensor { shape, data })
+        Ok(Tensor { shape: shape.to_vec().into_boxed_slice(), data })
     }
 
-    pub fn init_tensor_f16(&self, shape: Vec<u32>, data: &[half::f16]) -> Result<Tensor<B>, Error> {
+    pub fn init_tensor_f16(&self, shape: &[u32], data: &[half::f16]) -> Result<Tensor<B>, Error> {
         debug_assert_eq!(
             shape.iter().product::<u32>(),
             data.len() as u32,
@@ -579,12 +579,12 @@ impl<B: GpuBackend> GpuContext<B> {
         let data_u16 = data.reinterpret_cast();
         let data = gpu_alloc_init(&self.inner, data_u16)?;
 
-        Ok(Tensor { shape, data })
+        Ok(Tensor { shape: shape.to_vec().into_boxed_slice(), data })
     }
 
     pub fn init_tensor_bf16(
         &self,
-        shape: Vec<u32>,
+        shape: &[u32],
         data: &[half::bf16],
     ) -> Result<Tensor<B>, Error> {
         debug_assert_eq!(
@@ -596,7 +596,7 @@ impl<B: GpuBackend> GpuContext<B> {
         let data_u16 = data.reinterpret_cast();
         let data = gpu_alloc_init(&self.inner, data_u16)?;
 
-        Ok(Tensor { shape, data })
+        Ok(Tensor { shape: shape.to_vec().into_boxed_slice(), data })
     }
 
     /// Allocates an empty one-hot vector.
@@ -604,7 +604,7 @@ impl<B: GpuBackend> GpuContext<B> {
         let data = gpu_alloc(&self.inner, classes)?;
         Ok(Tensor {
             data,
-            shape: vec![classes],
+            shape: vec![classes].into_boxed_slice(),
         })
     }
 
@@ -613,7 +613,7 @@ impl<B: GpuBackend> GpuContext<B> {
         let data = gpu_alloc_init(&self.inner, indices)?;
         Ok(Tensor {
             data,
-            shape: vec![indices.len() as u32],
+            shape: vec![indices.len() as u32].into_boxed_slice(),
         })
     }
 

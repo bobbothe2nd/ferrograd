@@ -7,7 +7,7 @@ use std::vec::Vec;
 use crate::dispatch::{GpuBackend, GpuBuffer, backend::MetaId};
 
 #[inline]
-pub(crate) fn build_dims(shape: &[MetaId], meta: &[u32]) -> Vec<u32> {
+pub fn build_dims(shape: &[MetaId], meta: &[u32]) -> Vec<u32> {
     let mut dims = Vec::with_capacity(shape.len());
 
     for dim in shape {
@@ -18,7 +18,7 @@ pub(crate) fn build_dims(shape: &[MetaId], meta: &[u32]) -> Vec<u32> {
 }
 
 #[inline]
-pub(crate) fn calc_grid(shape: &[u32], block: [u32; 3]) -> [u32; 3] {
+pub fn calc_grid(shape: &[u32], block: [u32; 3]) -> [u32; 3] {
     let out_rank = shape.len();
 
     if block[0] == block[1] {
@@ -65,7 +65,7 @@ pub trait ToBuffer<B: GpuBackend> {
 /// Can only be constructed through a [`GpuContext`](`crate::dispatch::GpuContext`) because it
 /// requires a buffer to be allocated on the GPU first.
 pub struct Tensor<B: GpuBackend = crate::dispatch::backend::GpuContext> {
-    pub(crate) shape: Vec<u32>,
+    pub(crate) shape: Box<[u32]>,
     pub(crate) data: GpuBuffer<B>,
 }
 

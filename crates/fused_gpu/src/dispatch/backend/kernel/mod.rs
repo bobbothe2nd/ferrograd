@@ -6,9 +6,9 @@ use crate::{
             SharedId, SimpleDType, Value, ValueId, ValueState,
         },
     },
-    errors::{Error, ErrorKind, GraphErrorContext},
+    errors::{Error, ErrorKind},
 };
-use std::{vec, vec::Vec};
+use std::vec::Vec;
 
 mod forward;
 
@@ -19,6 +19,8 @@ mod loss;
 mod optim;
 
 mod optimize;
+
+pub mod remap;
 
 /// Forward, backward, loss, and optim kernel IR.
 #[derive(Debug)]
@@ -33,87 +35,6 @@ pub struct KernelGroup<'a> {
 pub struct Dependencies<T> {
     pub val: T,
     pub dep: Vec<usize>,
-}
-
-pub fn topo_sort<T: Clone>(
-    nodes: &[Dependencies<T>],
-) -> Result<Vec<Dependencies<T>>, Error<GraphErrorContext<'_>>> {
-    let n = nodes.len();
-
-    let mut in_degree = vec![0_usize; n];
-    let mut adj = vec![Vec::new(); n];
-
-    for (node_id, node) in nodes.iter().enumerate() {
-        for &inp in &node.dep {
-            if inp >= n {
-                return Err(Error {
-                    msg: "invalid node reference in graph",
-                    kind: ErrorKind::ComputeGraphError,
-                    ctx: GraphErrorContext::MissingInput {
-                        node: node_id,
-                        input: inp,
-                    },
-                });
-            }
-
-            adj[inp].push(node_id);
-            in_degree[node_id] += 1;
-        }
-    }
-
-    let mut zeros: Vec<_> = (0..n).filter(|&i| in_degree[i] == 0).collect();
-
-    zeros.sort_unstable();
-
-    let mut order = Vec::with_capacity(n);
-
-    let mut idx = 0;
-    while idx < zeros.len() {
-        let node = zeros[idx];
-        idx += 1;
-
-        order.push(node);
-
-        let mut nexts = adj[node].clone();
-        nexts.sort_unstable();
-
-        for nxt in nexts {
-            in_degree[nxt] -= 1;
-            if in_degree[nxt] == 0 {
-                zeros.push(nxt);
-            }
-        }
-    }
-
-    if order.len() != n {
-        return Err(Error {
-            msg: "cycle detected in graph",
-            kind: ErrorKind::ComputeGraphError,
-            ctx: GraphErrorContext::CycleDetected {
-                node: 0,
-                path: order,
-            },
-        });
-    }
-
-    let mut new_index = vec![0_usize; n];
-    for (i, &old) in order.iter().enumerate() {
-        new_index[old] = i;
-    }
-
-    let mut new_nodes = Vec::with_capacity(n);
-
-    for &old_id in &order {
-        let mut node = nodes[old_id].clone();
-
-        for inp in &mut node.dep {
-            *inp = new_index[*inp];
-        }
-
-        new_nodes.push(node);
-    }
-
-    Ok(new_nodes)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -7,18 +7,20 @@ use ferrograd::{
     nn::{MEAN_SQUARED_ERROR, Optim},
 };
 use gpu_telemetry::monitor::{GpuMonitor, telemetry::Telemetry};
-use log::Level;
 use rand_core::{Rng, SeedableRng};
 use rand_xorshift::XorShiftRng;
 use std::time::{Duration, Instant};
 
 const PATH: &str = "data/v2f32_test.bpat";
 
-const ITERS: usize = 32;
-const EPOCHS: usize = 64;
+const ITERS: usize = 128;
+const EPOCHS: usize = 1;
 
 const LR: f32 = 1e-10;
 
+#[cfg(feature = "rocm")]
+const INTERVAL: Duration = Duration::from_millis(5);
+#[cfg(not(feature = "rocm"))]
 const INTERVAL: Duration = Duration::from_millis(50);
 
 fn main() {
@@ -33,7 +35,7 @@ fn main() {
     const D_VAL: f32 = 0.05;
     const E_VAL: f32 = 1.0;
 
-    stderrlog::new().verbosity(Level::Debug).init().unwrap();
+    // stderrlog::new().verbosity(log::Level::Debug).init().unwrap();
 
     let mut meta = Metadata::new();
     let m = meta.new_field();
@@ -91,15 +93,15 @@ fn main() {
 
     let in_tensors = ctx.load_tensors(PATH).unwrap_or_else(|_| {
         vec![
-            ctx.init_tensor_f32([M, K].to_vec(), &[A_VAL; (M * K) as usize])
+            ctx.init_tensor_f32(&[M, K], &[A_VAL; (M * K) as usize])
                 .unwrap(),
-            ctx.init_tensor_f32([K, N].to_vec(), &[B_VAL; (K * N) as usize])
+            ctx.init_tensor_f32(&[K, N], &[B_VAL; (K * N) as usize])
                 .unwrap(),
-            ctx.init_tensor_f32([H, M].to_vec(), &[C_VAL; (H * M) as usize])
+            ctx.init_tensor_f32(&[H, M], &[C_VAL; (H * M) as usize])
                 .unwrap(),
-            ctx.init_tensor_f32([N, H].to_vec(), &[D_VAL; (N * H) as usize])
+            ctx.init_tensor_f32(&[N, H], &[D_VAL; (N * H) as usize])
                 .unwrap(),
-            ctx.init_tensor_f32([H, H].to_vec(), &[E_VAL; (H * H) as usize])
+            ctx.init_tensor_f32(&[H, H], &[E_VAL; (H * H) as usize])
                 .unwrap(),
         ]
     });
@@ -131,7 +133,7 @@ fn main() {
 
             let arr = [target; (H * H) as usize];
 
-            ctx.init_tensor_f32(vec![H, H], &arr)
+            ctx.init_tensor_f32(&[H, H], &arr)
         }
         .unwrap();
 
@@ -173,7 +175,7 @@ fn main() {
             }
         }
 
-        let avg_usage = accum_usage / (telemetry.samples.len() as u64);
+        let avg_usage = accum_usage.checked_div(telemetry.samples.len() as u64).unwrap_or(0);
 
         println!("\n  AVERAGE MEMORY USAGE: {}", avg_usage);
         println!(" MAXIMUM MEMORY BUDGET: {}\n", max_budget);
