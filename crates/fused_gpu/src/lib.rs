@@ -8,26 +8,28 @@
 //!
 //! You can also use custom backends.
 
-#![forbid(clippy::unimplemented)]
-#![forbid(clippy::print_stderr)]
-#![forbid(clippy::print_stdout)]
-#![forbid(clippy::approx_constant)]
-#![deny(clippy::pedantic)]
-#![allow(clippy::too_many_lines)]
-#![allow(clippy::similar_names)]
-#![allow(clippy::cast_possible_truncation)]
-#![allow(clippy::cast_lossless)]
-#![allow(clippy::missing_errors_doc)]
-#![deny(clippy::nursery)]
-#![deny(clippy::all)]
-#![allow(clippy::type_complexity)]
-#![allow(clippy::too_many_arguments)]
-#![forbid(clippy::unwrap_used)]
-#![forbid(clippy::expect_used)]
-#![forbid(clippy::panic)]
-#![forbid(unconditional_recursion)]
-#![forbid(clippy::std_instead_of_core)]
-#![deny(unsafe_code)]
+#![forbid(
+    clippy::unimplemented,
+    clippy::print_stderr,
+    clippy::print_stdout,
+    clippy::approx_constant,
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    unconditional_recursion,
+    clippy::std_instead_of_core
+)]
+#![deny(clippy::pedantic, clippy::nursery, clippy::all, unsafe_code)]
+#![allow(
+    clippy::too_many_lines,
+    clippy::cast_ptr_alignment,
+    clippy::similar_names,
+    clippy::cast_possible_truncation,
+    clippy::cast_lossless,
+    clippy::missing_errors_doc,
+    clippy::type_complexity,
+    clippy::too_many_arguments
+)]
 
 pub mod dispatch;
 

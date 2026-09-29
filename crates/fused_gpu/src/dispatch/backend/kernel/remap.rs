@@ -1,5 +1,9 @@
 use crate::{
-    dispatch::backend::{NodeId, kernel::{Dependencies, Redirect}}, errors::{Error, ErrorKind, GraphErrorContext},
+    dispatch::backend::{
+        NodeId,
+        kernel::{Dependencies, Redirect},
+    },
+    errors::{Error, ErrorKind, GraphErrorContext},
 };
 use std::{collections::HashMap, vec::Vec};
 
@@ -111,9 +115,7 @@ pub fn topo_sort_indirect<T: Clone>(
         }
     }
 
-    let mut zeros: Vec<_> = (0..n)
-        .filter(|&i| in_degree[i] == 0)
-        .collect();
+    let mut zeros: Vec<_> = (0..n).filter(|&i| in_degree[i] == 0).collect();
 
     zeros.sort_unstable();
 
@@ -178,7 +180,7 @@ pub fn topo_sort_indirect<T: Clone>(
 }
 
 /// Remaps the indices of kernels from node IDs to kernel IDs
-/// 
+///
 /// Use this before `topo_sort`
 pub fn remap_kernels<K>(
     kernels: &mut [Dependencies<Redirect<(K, NodeId, &[bool])>>],
@@ -186,21 +188,17 @@ pub fn remap_kernels<K>(
     let node_to_kernel = kernels
         .iter()
         .enumerate()
-        .filter_map(|(idx, dependency)| {
-            match &dependency.val {
-                Redirect::Unmasked((_, node_id, _)) => Some((*node_id, idx)),
-                Redirect::Redirected(_) => None,
-            }
+        .filter_map(|(idx, dependency)| match &dependency.val {
+            Redirect::Unmasked((_, node_id, _)) => Some((*node_id, idx)),
+            Redirect::Redirected(_) => None,
         })
         .collect::<HashMap<_, _>>();
 
     let kernel_to_node = kernels
         .iter()
-        .filter_map(|dependency| {
-            match &dependency.val {
-                Redirect::Unmasked((_, node_id, _)) => Some(*node_id),
-                Redirect::Redirected(_) => None,
-            }
+        .filter_map(|dependency| match &dependency.val {
+            Redirect::Unmasked((_, node_id, _)) => Some(*node_id),
+            Redirect::Redirected(_) => None,
         })
         .collect();
 
@@ -226,4 +224,50 @@ pub fn restore_kernels<K>(
             }
         }
     }
+}
+
+/// Iterates over kernels, calling `f` for each kernel in dependency order
+pub fn eval_dependency_order<K, F>(
+    kernels: &[Dependencies<Redirect<(K, NodeId, &[bool])>>],
+    mut f: F,
+) -> Result<(), Error>
+where
+    F: FnMut(&K, NodeId, &[bool]) -> Result<(), Error>,
+{
+    let mut resolved = Vec::new();
+    let mut tmp_res = Vec::new();
+
+    while resolved.len() < kernels.len() {
+        for kernel in kernels {
+            let dep = &kernel.dep;
+
+            let (kernel, idx, params) = match &kernel.val {
+                Redirect::Unmasked(kernel_data) => kernel_data,
+                Redirect::Redirected(idx) => match &kernels[*idx].val {
+                    Redirect::Unmasked(kernel) => kernel,
+                    Redirect::Redirected(_) => {
+                        return Err(Error {
+                            msg: "double redirection or loop encountered in kernel resolution",
+                            kind: ErrorKind::UnresolvedRedirection,
+                            ctx: (),
+                        });
+                    }
+                },
+            };
+
+            if resolved.contains(idx) {
+                continue;
+            }
+
+            if dep.iter().all(|x| resolved.contains(x)) {
+                tmp_res.push(*idx);
+
+                f(kernel, *idx, params)?;
+            }
+        }
+
+        resolved.append(&mut tmp_res);
+    }
+
+    Ok(())
 }

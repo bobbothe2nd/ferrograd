@@ -7,6 +7,7 @@ use std::vec::Vec;
 use crate::dispatch::{GpuBackend, GpuBuffer, backend::MetaId};
 
 #[inline]
+#[must_use]
 pub fn build_dims(shape: &[MetaId], meta: &[u32]) -> Vec<u32> {
     let mut dims = Vec::with_capacity(shape.len());
 
@@ -18,6 +19,7 @@ pub fn build_dims(shape: &[MetaId], meta: &[u32]) -> Vec<u32> {
 }
 
 #[inline]
+#[must_use]
 pub fn calc_grid(shape: &[u32], block: [u32; 3]) -> [u32; 3] {
     let out_rank = shape.len();
 

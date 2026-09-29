@@ -291,7 +291,7 @@ pub enum Dynamic {
     #[cfg(feature = "wgsl")]
     Wgsl(wgsl::GpuContext),
     #[cfg(feature = "rocm")]
-    Rocm(rocm::GpuContext)
+    Rocm(rocm::GpuContext),
 }
 
 macro_rules! impl_op {
@@ -515,7 +515,7 @@ impl GpuBufferBackend for DynBuffer {
             #[cfg(feature = "wgsl")]
             Self::Wgsl(ctx) => ctx.size() as u32,
             #[cfg(feature = "rocm")]
-            Self::Rocm(ctx) => ctx.size() as u32,
+            Self::Rocm(ctx) => ctx.size(),
         }
     }
 
@@ -540,12 +540,7 @@ impl ToBuffer<Dynamic> for DynBuffer {
     }
 }
 
-impl_backend!(
-    DynKernel,
-    Unit,
-    GpuKernel,
-    Kernel,
-);
+impl_backend!(DynKernel, Unit, GpuKernel, Kernel,);
 
 impl GpuKernelBackend for DynKernel {
     impl_op! {
@@ -554,15 +549,5 @@ impl GpuKernelBackend for DynKernel {
     }
 }
 
-impl_backend!(
-    DynSchedule,
-    Unit,
-    Schedule,
-    Schedule,
-);
-impl_backend!(
-    DynMetaBuf,
-    Unit,
-    Buffer,
-    DevMappedAlloc,
-);
+impl_backend!(DynSchedule, Unit, Schedule, Schedule,);
+impl_backend!(DynMetaBuf, Unit, Buffer, DevMappedAlloc,);

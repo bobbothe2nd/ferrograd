@@ -1,7 +1,10 @@
 use crate::{
     dispatch::backend::{
-        Op, Param, ParamTy, SimpleDType, ValueId, ValueState, codegen::{self, def_var_wgsl, newline, tab}, kernel::RawKernel,
-    }, errors::{Error, ErrorKind},
+        Op, Param, ParamTy, SimpleDType, ValueId, ValueState,
+        codegen::{self, def_var_wgsl, newline, tab},
+        kernel::RawKernel,
+    },
+    errors::{Error, ErrorKind},
 };
 use core::fmt::Write;
 use std::{string::String, vec::Vec};

@@ -52,12 +52,9 @@ fn mul_add_forward_backward() {
     let kernels = ctx.compile(&ir, &options).unwrap();
 
     let in_tensors = [
-        ctx.init_tensor_f32(&[32, 32], &[3.0; 1024])
-            .unwrap(),
-        ctx.init_tensor_f32(&[32, 32], &[2.0; 1024])
-            .unwrap(),
-        ctx.init_tensor_f32(&[32, 32], &[1.0; 1024])
-            .unwrap(),
+        ctx.init_tensor_f32(&[32, 32], &[3.0; 1024]).unwrap(),
+        ctx.init_tensor_f32(&[32, 32], &[2.0; 1024]).unwrap(),
+        ctx.init_tensor_f32(&[32, 32], &[1.0; 1024]).unwrap(),
     ];
 
     ctx.upload(&saved_tensors.seed, &[1_f32; 1024], 0, 0)

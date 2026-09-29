@@ -1,22 +1,35 @@
 use log::debug;
 
-use crate::{dispatch::{
-    CompilationOptions, DebugCompilationOptions, backend::{
-        DType, Op, Param, ParamTy, SharedAlloc, SimpleDType, ValueId, codegen::{self, def_var_c, newline}, kernel::RawKernel,
+use crate::{
+    dispatch::{
+        CompilationOptions, DebugCompilationOptions,
+        backend::{
+            DType, Op, Param, ParamTy, SharedAlloc, SimpleDType, ValueId,
+            codegen::{self, def_var_c, newline},
+            kernel::RawKernel,
+        },
     },
-}, errors::Error};
+    errors::Error,
+};
 
 use core::fmt::Write;
 
-pub(super) fn generate_hip(src: &RawKernel, params: &[Param], options: &CompilationOptions) -> Result<String, Error> {
-    let Ok(mut out) = r#"
+pub(super) fn generate_hip(
+    src: &RawKernel,
+    params: &[Param],
+    options: &CompilationOptions,
+) -> Result<String, Error> {
+    let Ok(mut out) = "
 #include <cstdint>
 #include <hip/hip_bfloat16.h>
 #include <hip/hip_fp16.h>
 #include <hip/hip_runtime.h>
-"#.parse::<String>();
+"
+    .parse::<String>();
 
-    let pretty_print = options.debug.contains(DebugCompilationOptions::PRETTY_PRINT_IR);
+    let pretty_print = options
+        .debug
+        .contains(DebugCompilationOptions::PRETTY_PRINT_IR);
 
     out.push_str("extern \"C\" __global__\nvoid kernel(");
 
@@ -49,12 +62,7 @@ fn gen_shared(out: &mut String, shared: &[SharedAlloc], pretty_print: bool) {
     for (i, s) in shared.iter().enumerate() {
         newline(pretty_print, out, 0);
 
-        let _ = write!(
-            out,
-            "__shared__ {} shared{i}[{}];",
-            s.dtype.fmt_c(),
-            s.size
-        );
+        let _ = write!(out, "__shared__ {} shared{i}[{}];", s.dtype.fmt_c(), s.size);
     }
 }
 
@@ -70,7 +78,13 @@ fn gen_args(out: &mut String, params: &[Param]) {
             "const "
         };
 
-        let _ = write!(out, "{}{} *param{}", read_only, param.dtype.fmt_c(), param.pid);
+        let _ = write!(
+            out,
+            "{}{} *param{}",
+            read_only,
+            param.dtype.fmt_c(),
+            param.pid
+        );
     }
 }
 
@@ -208,7 +222,11 @@ fn process_op(
         }
 
         Op::GlobalId { axis } => {
-            let _ = write!(out, "blockIdx.{axis} * {} + threadIdx.{axis}", kernel.block[*axis as usize]);
+            let _ = write!(
+                out,
+                "blockIdx.{axis} * {} + threadIdx.{axis}",
+                kernel.block[*axis as usize]
+            );
         }
 
         Op::Add { a, b } => {
@@ -288,7 +306,7 @@ fn process_op(
                 "fmaf"
             } else {
                 "fma"
-            }; 
+            };
             let _ = write!(
                 out,
                 "{symbol}({}, {}, {})",
@@ -379,7 +397,11 @@ fn process_op(
         }
 
         Op::CastBF16 { id } => {
-            let _ = write!(out, "static_cast<hip_bfloat16>({})", render_val(*id, kernel)?);
+            let _ = write!(
+                out,
+                "static_cast<hip_bfloat16>({})",
+                render_val(*id, kernel)?
+            );
         }
 
         Op::ParamStore {

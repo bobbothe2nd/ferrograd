@@ -60,7 +60,7 @@ impl GpuKernelBackend for () {
 pub struct NopGpuContext;
 
 impl NopGpuContext {
-    pub fn new() -> Result<Self, Error> {
+    pub const fn new() -> Result<Self, Error> {
         Err(Error {
             msg: "using nop backend",
             kind: ErrorKind::UnsupportedFeature,

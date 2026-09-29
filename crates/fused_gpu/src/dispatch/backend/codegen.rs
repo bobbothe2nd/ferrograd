@@ -1,64 +1,70 @@
-use core::fmt::{Write, Display};
+use core::fmt::{self, Display, Write};
 
-use crate::{dispatch::backend::{Axis, DType, Op, SimpleDType, ValueId, ValueState, kernel::RawKernel}, errors::{Error, ErrorKind}};
+use crate::{
+    dispatch::backend::{Axis, DType, Op, SimpleDType, ValueId, ValueState, kernel::RawKernel},
+    errors::{Error, ErrorKind},
+};
 
 impl SimpleDType {
     #[inline]
+    #[must_use]
     pub const fn fmt_c(self) -> &'static str {
         match self {
-            SimpleDType::F64 => "double",
-            SimpleDType::F32 => "float",
-            SimpleDType::F16 => "__half",
-            SimpleDType::BF16 => "hip_bfloat16",
-            SimpleDType::Bool => "bool",
-            SimpleDType::I32 => "int32_t",
-            SimpleDType::U32 => "uint32_t",
+            Self::F64 => "double",
+            Self::F32 => "float",
+            Self::F16 => "__half",
+            Self::BF16 => "hip_bfloat16",
+            Self::Bool => "bool",
+            Self::I32 => "int32_t",
+            Self::U32 => "uint32_t",
         }
     }
 
     #[inline]
+    #[must_use]
     pub const fn fmt_rust(self) -> &'static str {
         match self {
-            SimpleDType::F64 => "f64",
-            SimpleDType::F32 => "f32",
-            SimpleDType::F16 => "f16",
-            SimpleDType::BF16 => "bf16",
-            SimpleDType::Bool => "bool",
-            SimpleDType::I32 => "i32",
-            SimpleDType::U32 => "u32",
+            Self::F64 => "f64",
+            Self::F32 => "f32",
+            Self::F16 => "f16",
+            Self::BF16 => "bf16",
+            Self::Bool => "bool",
+            Self::I32 => "i32",
+            Self::U32 => "u32",
         }
     }
 
     #[inline]
     pub const fn fmt_wgsl(self) -> Result<&'static str, Error> {
         match self {
-            SimpleDType::F64 => Ok("f64"),
-            SimpleDType::F32 => Ok("f32"),
-            SimpleDType::F16 => Ok("f16"),
-            SimpleDType::BF16 => Err(Error {
+            Self::F64 => Ok("f64"),
+            Self::F32 => Ok("f32"),
+            Self::F16 => Ok("f16"),
+            Self::BF16 => Err(Error {
                 msg: "bf16 not supported",
                 kind: ErrorKind::UnsupportedFeature,
                 ctx: (),
             }),
-            SimpleDType::Bool => Ok("bool"),
-            SimpleDType::I32 => Ok("i32"),
-            SimpleDType::U32 => Ok("u32"),
+            Self::Bool => Ok("bool"),
+            Self::I32 => Ok("i32"),
+            Self::U32 => Ok("u32"),
         }
     }
 }
 
 impl DType {
     #[inline]
+    #[must_use]
     pub const fn fmt_c(self) -> &'static str {
         match self {
-            DType::Simple(dtype) => dtype.fmt_c(),
+            Self::Simple(dtype) => dtype.fmt_c(),
             _ => todo!(),
         }
     }
 
     #[inline]
     pub const fn fmt_rust(self) -> Result<&'static str, Error> {
-        let DType::Simple(dtype) = self else {
+        let Self::Simple(dtype) = self else {
             return Err(Error {
                 msg: "MMA not supported",
                 kind: ErrorKind::UnsupportedFeature,
@@ -71,7 +77,7 @@ impl DType {
 
     #[inline]
     pub const fn fmt_wgsl(self) -> Result<&'static str, Error> {
-        let DType::Simple(dtype) = self else {
+        let Self::Simple(dtype) = self else {
             return Err(Error {
                 msg: "MMA not supported",
                 kind: ErrorKind::UnsupportedFeature,
@@ -85,27 +91,29 @@ impl DType {
 
 impl Display for Axis {
     #[inline]
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.fmt_vec3())
     }
 }
 
 impl Axis {
     #[inline]
+    #[must_use]
     pub const fn fmt_vec3(self) -> &'static str {
         match self {
-            Axis::X => "x",
-            Axis::Y => "y",
-            Axis::Z => "z",
+            Self::X => "x",
+            Self::Y => "y",
+            Self::Z => "z",
         }
     }
 
     #[inline]
+    #[must_use]
     pub const fn fmt_idx(self) -> &'static str {
         match self {
-            Axis::X => "0",
-            Axis::Y => "1",
-            Axis::Z => "2",
+            Self::X => "0",
+            Self::Y => "1",
+            Self::Z => "2",
         }
     }
 }
@@ -133,7 +141,7 @@ pub fn def_var_wgsl<F>(
     kernel: &RawKernel,
     process_op: F,
 ) -> Result<(), Error>
-where 
+where
     F: FnOnce(&mut String, &Op, &mut usize, &RawKernel) -> Result<(), Error>,
 {
     let val = &kernel.values[id];
@@ -184,11 +192,7 @@ where
         ValueState::Masked | ValueState::Inline => {}
 
         ValueState::Const => {
-            let _ = write!(
-                out,
-                "const {} v{id}",
-                val.dtype.fmt_c()
-            );
+            let _ = write!(out, "const {} v{id}", val.dtype.fmt_c());
 
             if let Some(op) = &val.init {
                 let _ = out.write_str(" = ");
@@ -199,11 +203,7 @@ where
         }
 
         _ => {
-            let _ = write!(
-                out,
-                "{} v{id}",
-                val.dtype.fmt_c()
-            );
+            let _ = write!(out, "{} v{id}", val.dtype.fmt_c());
 
             if let Some(op) = &val.init {
                 let _ = out.write_str(" = ");
@@ -218,7 +218,7 @@ where
 }
 
 pub fn render_val<F>(id: ValueId, kernel: &RawKernel, process_op: F) -> Result<String, Error>
-where 
+where
     F: FnOnce(&mut String, &Op, &mut usize, &RawKernel) -> Result<(), Error>,
 {
     let mut out = String::new();

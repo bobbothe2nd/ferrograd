@@ -1,11 +1,10 @@
 #![allow(unsafe_code)]
 
-use std::sync::Arc;
+use std::rc::Rc;
 
 use core::ptr::from_ref;
 
 use briny::raw::cast::cast_slice;
-use rocm_rt::{hip::{callback::Callback, graph::Graph}, shared::MatrixKind};
 pub use rocm_rt::{
     hip::{
         HipError,
@@ -21,16 +20,26 @@ pub use rocm_rt::{
     },
     shared::GfxVersion,
 };
+use rocm_rt::{
+    hip::{callback::Callback, graph::Graph},
+    shared::MatrixKind,
+};
 
 use crate::{
     dispatch::{
-        CompilationOptions, GpuBackend, GpuBufferBackend, GpuKernelBackend, TargetCompilationOptions, TargetFlags,
+        CompilationOptions, GpuBackend, GpuBufferBackend, GpuKernelBackend,
+        TargetCompilationOptions, TargetFlags,
         backend::{
-                MetaId, NodeId, Param, kernel::{Dependencies, RawKernel, Redirect,
+            MetaId, NodeId, Param,
+            kernel::{
+                Dependencies, RawKernel, Redirect,
                 remap::{remap_kernels, topo_sort_indirect},
-            }, rocm::generate::generate_hip,
+            },
+            rocm::generate::generate_hip,
         },
-    }, errors::{Error, ErrorKind}, tensor::{build_dims, calc_grid},
+    },
+    errors::{Error, ErrorKind},
+    tensor::{build_dims, calc_grid},
 };
 
 mod generate;
@@ -45,6 +54,7 @@ macro_rules! map_err {
     };
 }
 
+#[must_use]
 pub fn is_rocm_present() -> bool {
     rocm_rt::is_amdhip64_present() && rocm_rt::is_hiprtc_present()
 }
@@ -80,10 +90,7 @@ impl GpuBackend for GpuContext {
     type Schedule = Schedule;
 
     fn alloc(&self, len: u32) -> Result<Self::Buffer, Error> {
-        map_err!(
-            self.device.alloc(len),
-            "failed to allocate GPU buffer"
-        )
+        map_err!(self.device.alloc(len), "failed to allocate GPU buffer")
     }
 
     fn alloc_init(&self, data: &[u8]) -> Result<Self::Buffer, Error> {
@@ -100,10 +107,7 @@ impl GpuBackend for GpuContext {
 
         if just_mapped {
             unsafe {
-                map_err!(
-                    host_buf.unmap(),
-                    "failed to unmap device buffer"
-                )?;
+                map_err!(host_buf.unmap(), "failed to unmap device buffer")?;
             }
         }
 
@@ -158,9 +162,7 @@ impl GpuBackend for GpuContext {
             flags |= TargetFlags::LIN_ACC;
         }
 
-        TargetCompilationOptions {
-            flags,
-        }
+        TargetCompilationOptions { flags }
     }
 
     fn download(&self, buffer: &Self::Buffer, out: &mut [u8]) -> Result<(), Error> {
@@ -168,18 +170,19 @@ impl GpuBackend for GpuContext {
 
         let (host_buf, just_mapped) = match DevMapped::new(out) {
             Ok(buf) => (buf, true),
-            Err(HipError::HostMemoryAlreadyRegistered) => (unsafe {
-                DevMapped::from_slice(out)
-            }, false),
+            Err(HipError::HostMemoryAlreadyRegistered) => {
+                (unsafe { DevMapped::from_slice(out) }, false)
+            }
             e => return map_err!(e, "failed to allocate host buffer").map(|_| {}),
         };
 
-        map_err!(buffer.copy_to_host(&host_buf, 0, 0, len), "failed to copy from GPU to host")?;
+        map_err!(
+            buffer.copy_to_host(&host_buf, 0, 0, len),
+            "failed to copy from GPU to host"
+        )?;
 
         if just_mapped {
-            unsafe {
-                map_err!(host_buf.unmap(), "failed to unmap host buffer")
-            }
+            unsafe { map_err!(host_buf.unmap(), "failed to unmap host buffer") }
         } else {
             Ok(())
         }
@@ -219,7 +222,8 @@ impl GpuBackend for GpuContext {
                 "failed to launch kernel"
             )?;
             map_err!(
-                self.stream.launch_host(Callback::new(drop_box), Box::into_raw(boxed).cast()),
+                self.stream
+                    .launch_host(Callback::new(drop_box), Box::into_raw(boxed).cast()),
                 "failed to launch host callback"
             )
         }
@@ -227,15 +231,19 @@ impl GpuBackend for GpuContext {
 
     fn dispatch_schedule(&self, schedule: &Self::Schedule) -> Result<(), Error> {
         unsafe extern "C" fn drop_arc(data: *mut u8) {
-            let _ = unsafe { Arc::from_raw(data.cast::<ScheduleInner>()) };
+            let _ = unsafe { Rc::from_raw(data.cast::<ScheduleInner>()) };
         }
 
-        let schedule = Arc::into_raw(schedule.clone().graph);
+        let schedule = Rc::into_raw(schedule.clone().graph);
 
         unsafe {
-            map_err!(self.stream.launch_graph(&(*schedule).graph), "failed to launch graph")?;
             map_err!(
-                self.stream.launch_host(Callback::new(drop_arc), schedule as *mut _),
+                self.stream.launch_graph(&(*schedule).graph),
+                "failed to launch graph"
+            )?;
+            map_err!(
+                self.stream
+                    .launch_host(Callback::new(drop_arc), schedule as *mut _),
                 "failed to launch host callback"
             )
         }
@@ -279,7 +287,9 @@ impl GpuBackend for GpuContext {
                         });
                     }
                 },
-            }.0.clone();
+            }
+            .0
+            .clone();
 
             let mut kernel_args = Vec::with_capacity(1 + bindings.len());
 
@@ -311,11 +321,14 @@ impl GpuBackend for GpuContext {
             args.push(kernel_args);
         }
 
-        let graph = map_err!(graph.init(GraphInstantiateFlags::empty()), "failed to instantiate graph")?;
+        let graph = map_err!(
+            graph.init(GraphInstantiateFlags::empty()),
+            "failed to instantiate graph"
+        )?;
         let sched = ScheduleInner { graph, _args: args };
 
         Ok(Schedule {
-            graph: Arc::new(sched),
+            graph: Rc::new(sched),
         })
     }
 
@@ -347,9 +360,7 @@ impl GpuBackend for GpuContext {
         )?;
 
         if just_mapped {
-            unsafe {
-                map_err!(host_buf.unmap(), "failed to unregister data in upload")
-            }
+            unsafe { map_err!(host_buf.unmap(), "failed to unregister data in upload") }
         } else {
             Ok(())
         }
@@ -366,7 +377,7 @@ impl GpuBackend for GpuContext {
 #[repr(transparent)]
 #[derive(Clone)]
 pub struct Schedule {
-    graph: Arc<ScheduleInner>,
+    graph: Rc<ScheduleInner>,
 }
 
 struct ScheduleInner {

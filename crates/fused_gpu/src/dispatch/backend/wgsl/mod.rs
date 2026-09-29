@@ -4,7 +4,7 @@ use crate::{
         GpuKernelBackend, TargetCompilationOptions, TargetFlags,
         backend::{
             MetaId, NodeId, Param,
-            kernel::{Dependencies, RawKernel, Redirect},
+            kernel::{Dependencies, RawKernel, Redirect, remap::eval_dependency_order},
         },
     },
     errors::{Error, ErrorKind},
@@ -348,81 +348,50 @@ impl GpuBackend for GpuContext {
         meta: &[u32],
         meta_buf: &Self::MetaBuf,
     ) -> Result<Self::Schedule, Error> {
-        let mut resolved = Vec::new();
-        let mut tmp_res = Vec::new();
-
         let mut scheduled_kernels = Vec::new();
 
-        while resolved.len() < kernels.len() {
-            for kernel in &kernels {
-                let dep = &kernel.dep;
+        eval_dependency_order(&kernels, |kernel, _, params| {
+            let iter_space = build_dims(kernel.iteration_space(), meta);
+            let grid = calc_grid(&iter_space, *kernel.block());
 
-                let kernel = match &kernel.val {
-                    Redirect::Unmasked(kernel_data) => kernel_data,
-                    Redirect::Redirected(idx) => match &kernels[*idx].val {
-                        Redirect::Unmasked(kernel) => kernel,
-                        Redirect::Redirected(_) => {
-                            return Err(Error {
-                                msg: "double redirection or loop encountered in kernel resolution",
-                                kind: ErrorKind::UnresolvedRedirection,
-                                ctx: (),
-                            });
-                        }
-                    },
-                };
+            let mut kernel_bindings = Vec::with_capacity(1 + bindings.len());
 
-                let (kernel, idx, params) = kernel;
+            kernel_bindings.push(BindGroupEntry {
+                binding: 0,
+                resource: meta_buf.as_entire_binding(),
+            });
 
-                if resolved.contains(idx) {
-                    continue;
-                }
+            bindings
+                .iter()
+                .enumerate()
+                .filter_map(|(i, buf)| {
+                    let index = 1 + i;
 
-                if dep.iter().all(|x| resolved.contains(x)) {
-                    tmp_res.push(*idx);
+                    if params[index] {
+                        let entry = BindGroupEntry {
+                            binding: index as u32,
+                            resource: buf.as_entire_binding(),
+                        };
 
-                    let iter_space = build_dims(kernel.iteration_space(), meta);
-                    let grid = calc_grid(&iter_space, *kernel.block());
+                        Some(entry)
+                    } else {
+                        None
+                    }
+                })
+                .for_each(|entry| kernel_bindings.push(entry));
 
-                    let mut kernel_bindings = Vec::with_capacity(1 + bindings.len());
+            let kernel = &kernel.kernel;
 
-                    kernel_bindings.push(BindGroupEntry {
-                        binding: 0,
-                        resource: meta_buf.as_entire_binding(),
-                    });
+            let bind_group = self.device.create_bind_group(&BindGroupDescriptor {
+                layout: &kernel.get_bind_group_layout(0),
+                entries: &kernel_bindings,
+                label: None,
+            });
 
-                    bindings
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(i, buf)| {
-                            let index = 1 + i;
+            scheduled_kernels.push((kernel.clone(), grid, bind_group));
 
-                            if params[index] {
-                                let entry = BindGroupEntry {
-                                    binding: index as u32,
-                                    resource: buf.as_entire_binding(),
-                                };
-
-                                Some(entry)
-                            } else {
-                                None
-                            }
-                        })
-                        .for_each(|entry| kernel_bindings.push(entry));
-
-                    let kernel = &kernel.kernel;
-
-                    let bind_group = self.device.create_bind_group(&BindGroupDescriptor {
-                        layout: &kernel.get_bind_group_layout(0),
-                        entries: &kernel_bindings,
-                        label: None,
-                    });
-
-                    scheduled_kernels.push((kernel.clone(), grid, bind_group));
-                }
-            }
-
-            resolved.append(&mut tmp_res);
-        }
+            Ok(())
+        })?;
 
         Ok(Schedule {
             kernels: scheduled_kernels,

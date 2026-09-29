@@ -18,10 +18,9 @@ rocm = ["fused_gpu/rocm"]
 wgsl = ["fused_gpu/wgsl"]
 
 [dependencies]
-gpu_telemetry = { version = "0.2.0", optional = true }
 ferrograd-nn = { path = "../ferrograd-nn", version = "0.1.0-rc.1" }
 fused_gpu = { path = "../fused_gpu", version = "0.1.0-rc.1", features = ["io", "telemetry"] }
-briny = "0.8.1"
+briny = "0.10.0"
 pollster = "1"
 
 [dev-dependencies]

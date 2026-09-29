@@ -9,7 +9,10 @@ use crate::{
     tensor::{Tensor, ToBuffer, build_dims},
 };
 use briny::{
-    raw::cast::{slice_to_bytes, slice_to_bytes_mut},
+    raw::{
+        alloc::slice_in_box,
+        cast::{slice_to_bytes, slice_to_bytes_mut},
+    },
     traits::Pod,
 };
 use core::fmt::Debug;
@@ -209,6 +212,12 @@ pub trait GpuBackend: Sized {
         options: &CompilationOptions,
     ) -> Result<Self::Kernel, Error>;
 
+    /// Schedules the kernel operations by pre-computing kernel launches.
+    ///
+    /// On the default `ROCm` backend, this creates an `ExecGraph` (`hipGraphExec_t`).
+    /// That avoids a LOT of submission overhead.
+    ///
+    /// On the default WGSL backend, this just calculating grids and flattening the graph.
     fn schedule(
         &self,
         kernels: Vec<Dependencies<Redirect<(Self::Kernel, NodeId, &[bool])>>>,
@@ -217,6 +226,7 @@ pub trait GpuBackend: Sized {
         meta_buf: &Self::MetaBuf,
     ) -> Result<Self::Schedule, Error>;
 
+    /// Dispatchs/launches a kernel on this context
     fn dispatch_kernel(
         &self,
         kernel: &Self::Kernel,
@@ -225,10 +235,17 @@ pub trait GpuBackend: Sized {
         meta: &Self::MetaBuf,
     ) -> Result<(), Error>;
 
+    /// Dispatches/launches a schedule on this context
     fn dispatch_schedule(&self, schedule: &Self::Schedule) -> Result<(), Error>;
 
+    /// Synchronizes at least the work submitted by this context
+    ///
+    /// For an asynchronous version, use [`Self::is_ready`]
     fn sync(&self) -> Result<(), Error>;
 
+    /// Queries for ready state of context
+    ///
+    /// Used for awaiting completion instead of blocking like [`Self::sync`]
     fn is_ready(&self) -> Result<bool, Error>;
 }
 
@@ -544,7 +561,10 @@ impl<B: GpuBackend> GpuContext<B> {
     pub fn new_tensor<const N: u32>(&self, shape: &[u32]) -> Result<Tensor<B>, Error> {
         let len = shape.iter().product::<u32>() * const { N / 8 };
         let data = gpu_alloc(&self.inner, len)?;
-        Ok(Tensor { shape: shape.to_vec().into_boxed_slice(), data })
+        Ok(Tensor {
+            shape: slice_in_box(shape),
+            data,
+        })
     }
 
     pub fn init_tensor_f64(&self, shape: &[u32], data: &[f64]) -> Result<Tensor<B>, Error> {
@@ -555,7 +575,10 @@ impl<B: GpuBackend> GpuContext<B> {
         );
 
         let data = gpu_alloc_init(&self.inner, data)?;
-        Ok(Tensor { shape: shape.to_vec().into_boxed_slice(), data })
+        Ok(Tensor {
+            shape: slice_in_box(shape),
+            data,
+        })
     }
 
     pub fn init_tensor_f32(&self, shape: &[u32], data: &[f32]) -> Result<Tensor<B>, Error> {
@@ -566,7 +589,10 @@ impl<B: GpuBackend> GpuContext<B> {
         );
 
         let data = gpu_alloc_init(&self.inner, data)?;
-        Ok(Tensor { shape: shape.to_vec().into_boxed_slice(), data })
+        Ok(Tensor {
+            shape: slice_in_box(shape),
+            data,
+        })
     }
 
     pub fn init_tensor_f16(&self, shape: &[u32], data: &[half::f16]) -> Result<Tensor<B>, Error> {
@@ -579,14 +605,13 @@ impl<B: GpuBackend> GpuContext<B> {
         let data_u16 = data.reinterpret_cast();
         let data = gpu_alloc_init(&self.inner, data_u16)?;
 
-        Ok(Tensor { shape: shape.to_vec().into_boxed_slice(), data })
+        Ok(Tensor {
+            shape: slice_in_box(shape),
+            data,
+        })
     }
 
-    pub fn init_tensor_bf16(
-        &self,
-        shape: &[u32],
-        data: &[half::bf16],
-    ) -> Result<Tensor<B>, Error> {
+    pub fn init_tensor_bf16(&self, shape: &[u32], data: &[half::bf16]) -> Result<Tensor<B>, Error> {
         debug_assert_eq!(
             shape.iter().product::<u32>(),
             data.len() as u32,
@@ -596,7 +621,10 @@ impl<B: GpuBackend> GpuContext<B> {
         let data_u16 = data.reinterpret_cast();
         let data = gpu_alloc_init(&self.inner, data_u16)?;
 
-        Ok(Tensor { shape: shape.to_vec().into_boxed_slice(), data })
+        Ok(Tensor {
+            shape: slice_in_box(shape),
+            data,
+        })
     }
 
     /// Allocates an empty one-hot vector.

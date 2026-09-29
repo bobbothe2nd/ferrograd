@@ -175,7 +175,9 @@ fn main() {
             }
         }
 
-        let avg_usage = accum_usage.checked_div(telemetry.samples.len() as u64).unwrap_or(0);
+        let avg_usage = accum_usage
+            .checked_div(telemetry.samples.len() as u64)
+            .unwrap_or(0);
 
         println!("\n  AVERAGE MEMORY USAGE: {}", avg_usage);
         println!(" MAXIMUM MEMORY BUDGET: {}\n", max_budget);
