@@ -1,29 +1,25 @@
 #![allow(unsafe_code)]
 
-use std::rc::Rc;
-
-use core::ptr::from_ref;
-
-use briny::raw::cast::cast_slice;
 pub use rocm_rt::{
     hip::{
         HipError,
         device::Device,
-        graph::{ExecGraph, GraphInstantiateFlags, KernelParams},
+        graph::{ExecGraph, GraphInstantiateFlags, KernelParams, Node, Graph},
         memory::{Buffer, DevMapped, DevMappedAlloc},
         module::{Func, LaunchConfig},
         stream::Stream,
+        callback::Callback,
     },
     hiprtc::{
         HiprtcError,
         program::{CompileOptions, Hsaco},
     },
-    shared::GfxVersion,
+    shared::{GfxVersion, MatrixKind},
 };
-use rocm_rt::{
-    hip::{callback::Callback, graph::Graph},
-    shared::MatrixKind,
-};
+
+use core::ptr::from_ref;
+
+use briny::raw::cast::cast_slice;
 
 use crate::{
     dispatch::{
@@ -230,21 +226,10 @@ impl GpuBackend for GpuContext {
     }
 
     fn dispatch_schedule(&self, schedule: &Self::Schedule) -> Result<(), Error> {
-        unsafe extern "C" fn drop_arc(data: *mut u8) {
-            let _ = unsafe { Rc::from_raw(data.cast::<ScheduleInner>()) };
-        }
-
-        let schedule = Rc::into_raw(schedule.clone().graph);
-
         unsafe {
             map_err!(
-                self.stream.launch_graph(&(*schedule).graph),
+                self.stream.launch_graph(&schedule.graph),
                 "failed to launch graph"
-            )?;
-            map_err!(
-                self.stream
-                    .launch_host(Callback::new(drop_arc), schedule as *mut _),
-                "failed to launch host callback"
             )
         }
     }
@@ -266,19 +251,15 @@ impl GpuBackend for GpuContext {
 
         let mut args = Vec::new();
 
-        let mut nodes = vec![None; kernels.len()];
+        let mut nodes = Vec::<Node>::with_capacity(kernels.len());
 
-        for (idx, kernel) in kernels.iter().enumerate() {
-            let dep = kernel
-                .dep
-                .iter()
-                .filter_map(|dep| nodes[*dep])
-                .collect::<Vec<_>>();
+        for kernel in &kernels {
+            let dep = kernel.dep.iter().map(|dep| nodes[*dep].clone()).collect::<Vec<_>>();
 
             let kernel = match &kernel.val {
-                Redirect::Unmasked(kernel_data) => kernel_data,
+                Redirect::Unmasked(kernel_data) => &kernel_data.0,
                 Redirect::Redirected(idx) => match &kernels[*idx].val {
-                    Redirect::Unmasked(kernel) => kernel,
+                    Redirect::Unmasked(kernel) => &kernel.0,
                     Redirect::Redirected(_) => {
                         return Err(Error {
                             msg: "double redirection or loop encountered in kernel resolution",
@@ -287,9 +268,7 @@ impl GpuBackend for GpuContext {
                         });
                     }
                 },
-            }
-            .0
-            .clone();
+            };
 
             let mut kernel_args = Vec::with_capacity(1 + bindings.len());
 
@@ -299,7 +278,7 @@ impl GpuBackend for GpuContext {
                 kernel_args.push(from_ref(*binding) as *mut u8);
             }
 
-            let mut kernel_args = kernel_args.into_boxed_slice();
+            let mut kernel_args = kernel_args.into_boxed_slice(); // not saving args
 
             let iter_space = build_dims(kernel.iteration_space(), meta);
             let grid = calc_grid(&iter_space, *kernel.block());
@@ -312,24 +291,22 @@ impl GpuBackend for GpuContext {
                     block: kernel.block,
                 },
             );
+            let params_boxed = Box::new(params);
 
-            nodes[idx].replace(map_err!(
-                graph.add_kernel_node(&dep, &params),
+            nodes.push(map_err!(
+                graph.add_kernel_node(&dep, &params_boxed),
                 "failed to add kernel node to graph"
             )?);
 
-            args.push(kernel_args);
+            args.push(params_boxed);
         }
 
         let graph = map_err!(
             graph.init(GraphInstantiateFlags::empty()),
             "failed to instantiate graph"
         )?;
-        let sched = ScheduleInner { graph, _args: args };
 
-        Ok(Schedule {
-            graph: Rc::new(sched),
-        })
+        Ok(Schedule { graph, _args: args })
     }
 
     fn is_ready(&self) -> Result<bool, Error> {
@@ -374,15 +351,9 @@ impl GpuBackend for GpuContext {
     }
 }
 
-#[repr(transparent)]
-#[derive(Clone)]
 pub struct Schedule {
-    graph: Rc<ScheduleInner>,
-}
-
-struct ScheduleInner {
     graph: ExecGraph,
-    _args: Vec<Box<[*mut u8]>>,
+    _args: Vec<Box<KernelParams>>,
 }
 
 impl GpuBufferBackend for Buffer {

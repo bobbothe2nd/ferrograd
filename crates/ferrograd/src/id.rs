@@ -1,48 +1,34 @@
-use briny::traits::{Layout, StableLayout};
+use briny::traits::{Pod, StableLayout};
 use fused_gpu::dispatch::backend;
 
-#[repr(transparent)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct EdgeId(pub usize);
+macro_rules! id {
+    ($name:ident($inner:ty)) => {
+        #[repr(transparent)]
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        pub struct $name(pub(crate) $inner);
 
-unsafe impl StableLayout for EdgeId {}
+        unsafe impl StableLayout for $name {}
+        unsafe impl Pod for $name {}
 
-#[repr(transparent)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct NodeId(pub(crate) backend::NodeId);
+        impl $name {
+            #[must_use]
+            #[inline(always)]
+            pub const fn to_bits(self) -> $inner {
+                self.0
+            }
 
-unsafe impl StableLayout for NodeId {}
-unsafe impl Layout<backend::NodeId> for NodeId {}
-unsafe impl Layout<NodeId> for backend::NodeId {}
+            #[must_use]
+            #[inline(always)]
+            pub const fn from_bits(bits: $inner) -> Self {
+                Self(bits)
+            }
+        }
+    };
+}
 
-#[repr(transparent)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ParamId(pub(crate) backend::ParamId);
-
-unsafe impl StableLayout for ParamId {}
-unsafe impl Layout<backend::ParamId> for ParamId {}
-unsafe impl Layout<ParamId> for backend::ParamId {}
-
-#[repr(transparent)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct SharedId(pub(crate) backend::SharedId);
-
-unsafe impl StableLayout for SharedId {}
-unsafe impl Layout<backend::SharedId> for SharedId {}
-unsafe impl Layout<SharedId> for backend::SharedId {}
-
-#[repr(transparent)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct MetaId(pub(crate) backend::MetaId);
-
-unsafe impl StableLayout for MetaId {}
-unsafe impl Layout<backend::MetaId> for MetaId {}
-unsafe impl Layout<MetaId> for backend::MetaId {}
-
-#[repr(transparent)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ValueId(pub(crate) backend::ValueId);
-
-unsafe impl StableLayout for ValueId {}
-unsafe impl Layout<backend::ValueId> for ValueId {}
-unsafe impl Layout<ValueId> for backend::ValueId {}
+id!(EdgeId(usize));
+id!(NodeId(backend::NodeId));
+id!(ParamId(backend::ParamId));
+id!(SharedId(backend::SharedId));
+id!(MetaId(backend::MetaId));
+id!(ValueId(backend::ValueId));

@@ -35,7 +35,7 @@ fn main() {
     const D_VAL: f32 = 0.05;
     const E_VAL: f32 = 1.0;
 
-    // stderrlog::new().verbosity(log::Level::Debug).init().unwrap();
+    stderrlog::new().verbosity(log::Level::Debug).init().unwrap();
 
     let mut meta = Metadata::new();
     let m = meta.new_field();
