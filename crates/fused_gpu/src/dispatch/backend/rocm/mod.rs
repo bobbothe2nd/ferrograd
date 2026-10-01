@@ -39,7 +39,7 @@ use crate::{
     tensor::{build_dims, calc_grid},
 };
 
-mod generate;
+pub mod generate;
 
 macro_rules! map_err {
     ($func:expr, $msg:expr$(,)?) => {
@@ -159,7 +159,7 @@ impl GpuBackend for GpuContext {
 
         Ok(Kernel {
             block: src.block,
-            iter_space: src.iter_space.clone(),
+            iter_space: src.iter_space.clone().into_boxed_slice(),
             func,
         })
     }
@@ -267,10 +267,10 @@ impl GpuBackend for GpuContext {
         let mut args = Vec::new();
         let mut all_params = Vec::new();
 
-        let mut nodes = Vec::<Node>::with_capacity(kernels.len());
+        let mut nodes: Vec<Option<Node>> = vec![None; kernels.len()];
 
-        for kernel in &kernels {
-            let dep = kernel.dep.iter().map(|dep| nodes[*dep].clone()).collect::<Vec<_>>();
+        for (idx, kernel) in kernels.iter().enumerate() {
+            let dep = kernel.dep.iter().map(|dep| nodes[*dep].clone().unwrap()).collect::<Vec<_>>();
 
             let kernel = match &kernel.val {
                 Redirect::Unmasked(kernel_data) => &kernel_data.0,
@@ -309,7 +309,7 @@ impl GpuBackend for GpuContext {
             );
             let params_boxed = Box::new(params);
 
-            nodes.push(map_err!(
+            nodes[idx] = Some(map_err!(
                 graph.add_kernel_node(&dep, &params_boxed),
                 "failed to add kernel node to graph"
             )?);
@@ -325,10 +325,34 @@ impl GpuBackend for GpuContext {
 
         map_err!(graph.upload(&self.stream), "failed to upload graph")?;
 
+        let mut modules = Vec::with_capacity(kernels.len());
+
+        for kernel in &kernels {
+            let func = match &kernel.val {
+                Redirect::Unmasked(kernel) => kernel,
+                Redirect::Redirected(idx) => match &kernels[*idx].val {
+                    Redirect::Unmasked(kernel) => kernel,
+                    Redirect::Redirected(_) => {
+                        return Err(Error {
+                            msg: "double redirection or loop encountered in kernel resolution",
+                            kind: ErrorKind::UnresolvedRedirection,
+                            ctx: (),
+                        });
+                    }
+                },
+            }
+            .0
+            .func
+            .clone();
+
+            modules.push(func);
+        }
+
         Ok(Schedule {
             graph,
-            _params: all_params,
-            _args: args,
+            _params: all_params.into_boxed_slice(),
+            _args: args.into_boxed_slice(),
+            _modules: modules.into_boxed_slice(),
             _marker: PhantomData,
         })
     }
@@ -377,8 +401,9 @@ impl GpuBackend for GpuContext {
 
 pub struct Schedule<'a> {
     graph: ExecGraph,
-    _params: Vec<Box<KernelParams>>,
-    _args: Vec<Box<[*mut u8]>>,
+    _params: Box<[Box<KernelParams>]>,
+    _args: Box<[Box<[*mut u8]>]>,
+    _modules: Box<[Func]>,
     _marker: PhantomData<&'a [Buffer]>,
 }
 
@@ -395,7 +420,7 @@ impl GpuBufferBackend for Buffer {
 #[derive(Clone)]
 pub struct Kernel {
     block: [u32; 3],
-    iter_space: Vec<MetaId>,
+    iter_space: Box<[MetaId]>,
     func: Func,
 }
 

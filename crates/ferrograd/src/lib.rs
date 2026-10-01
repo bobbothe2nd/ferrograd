@@ -72,6 +72,15 @@ pub mod nn {
     pub use ferrograd_nn::op::*;
 }
 
+pub mod codegen {
+    pub use fused_gpu::dispatch::backend::{
+        kernel::remap::*,
+        codegen::*,
+        wgsl::generate::generate_wgsl,
+        rocm::generate::generate_hip,
+    };
+}
+
 #[allow(dead_code)]
 #[doc = include_str!("../README.md")]
 fn test() {}

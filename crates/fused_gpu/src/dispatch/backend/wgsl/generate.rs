@@ -38,7 +38,7 @@ pub(super) fn generate_layout_desc(params: &[Param]) -> Vec<BindGroupLayoutEntry
 }
 
 #[inline]
-pub(super) fn generate_wgsl(
+pub fn generate_wgsl(
     kernel: &RawKernel,
     params: &[Param],
     pretty_print: bool,

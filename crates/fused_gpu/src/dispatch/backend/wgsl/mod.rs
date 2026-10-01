@@ -28,7 +28,7 @@ pub use wgpu::{
     util::{BufferInitDescriptor, DeviceExt},
 };
 
-mod generate;
+pub mod generate;
 
 /// WGPU context for device and queue.
 #[derive(Debug)]

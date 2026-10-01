@@ -14,7 +14,7 @@ use crate::{
 
 use core::fmt::Write;
 
-pub(super) fn generate_hip(
+pub fn generate_hip(
     src: &RawKernel,
     params: &[Param],
     options: &CompilationOptions,

@@ -89,6 +89,9 @@ pub fn topo_sort<T: Clone>(
     Ok(new_nodes)
 }
 
+/// Sorts a graph just like [`topo_sort`], but updating redirections as well
+///
+/// Assumes redirections and dependencies are indices into the graph
 pub fn topo_sort_indirect<T: Clone>(
     nodes: &[Dependencies<Redirect<T>>],
 ) -> Result<Vec<Dependencies<Redirect<T>>>, Error<GraphErrorContext<'_>>> {
@@ -151,7 +154,6 @@ pub fn topo_sort_indirect<T: Clone>(
         });
     }
 
-    // old index -> new index
     let mut new_index = vec![0_usize; n];
 
     for (new, &old) in order.iter().enumerate() {
@@ -163,12 +165,10 @@ pub fn topo_sort_indirect<T: Clone>(
     for &old_id in &order {
         let mut node = nodes[old_id].clone();
 
-        // Remap dependency indices.
         for inp in &mut node.dep {
             *inp = new_index[*inp];
         }
 
-        // Remap redirected node indices.
         if let Redirect::Redirected(target) = &mut node.val {
             *target = new_index[*target];
         }
@@ -181,32 +181,45 @@ pub fn topo_sort_indirect<T: Clone>(
 
 /// Remaps the indices of kernels from node IDs to kernel IDs
 ///
-/// Use this before `topo_sort`
+/// Use this before [`topo_sort`]
 pub fn remap_kernels<K>(
     kernels: &mut [Dependencies<Redirect<(K, NodeId, &[bool])>>],
 ) -> Vec<NodeId> {
+    fn node_id<K, F, C>(
+        val: &Redirect<(K, NodeId, &[bool])>,
+        kernels: &[Dependencies<Redirect<(K, NodeId, &[bool])>>],
+        f: F,
+    ) -> Result<C, Error>
+    where 
+        F: FnOnce(&(K, NodeId, &[bool])) -> C
+    {
+        match val {
+            Redirect::Unmasked(val) => Ok(f(val)),
+            Redirect::Redirected(idx) => match &kernels[*idx].val {
+                Redirect::Unmasked(val) => Ok(f(val)),
+                Redirect::Redirected(_) => Err(Error {
+                    msg: "double redirection or loop encountered in kernel resolution",
+                    kind: ErrorKind::UnresolvedRedirection,
+                    ctx: (),
+                }),
+            },
+        }
+    }
+
     let node_to_kernel = kernels
         .iter()
         .enumerate()
-        .filter_map(|(idx, dependency)| match &dependency.val {
-            Redirect::Unmasked((_, node_id, _)) => Some((*node_id, idx)),
-            Redirect::Redirected(_) => None,
-        })
+        .filter_map(|(idx, dep)| node_id(&dep.val, kernels, |tuple| (tuple.1, idx)).ok())
         .collect::<HashMap<_, _>>();
 
     let kernel_to_node = kernels
         .iter()
-        .filter_map(|dependency| match &dependency.val {
-            Redirect::Unmasked((_, node_id, _)) => Some(*node_id),
-            Redirect::Redirected(_) => None,
-        })
+        .filter_map(|dep| node_id(&dep.val, kernels, |(_, node_id, _)| *node_id).ok())
         .collect();
 
-    for dependency in kernels {
-        if let Redirect::Unmasked(_) = &dependency.val {
-            for dep in &mut dependency.dep {
-                *dep = node_to_kernel[&NodeId::from(*dep)];
-            }
+    for dep in kernels {
+        for dep in &mut dep.dep {
+            *dep = node_to_kernel[&NodeId::from(*dep)];
         }
     }
 
@@ -217,16 +230,16 @@ pub fn restore_kernels<K>(
     kernels: &mut [Dependencies<Redirect<(K, NodeId, &[bool])>>],
     kernel_to_node: &[NodeId],
 ) {
-    for dependency in kernels {
-        if let Redirect::Unmasked(_) = &dependency.val {
-            for dep in &mut dependency.dep {
-                *dep = kernel_to_node[*dep];
-            }
+    for dep in kernels {
+        for dep in &mut dep.dep {
+            *dep = kernel_to_node[*dep];
         }
     }
 }
 
-/// Iterates over kernels, calling `f` for each kernel in dependency order
+/// Iterates over kernels, calling `f` for each kernel in dep order
+///
+/// If previously remapped, you must call [`restore_kernels`] first.
 pub fn eval_dependency_order<K, F>(
     kernels: &[Dependencies<Redirect<(K, NodeId, &[bool])>>],
     mut f: F,
