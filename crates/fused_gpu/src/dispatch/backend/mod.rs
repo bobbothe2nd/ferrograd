@@ -73,7 +73,7 @@ impl GpuBackend for NopGpuContext {
     type Buffer = ();
     type MetaBuf = ();
     type Kernel = ();
-    type Schedule = ();
+    type Schedule<'a> = ();
 
     fn target_spec(&self) -> TargetCompilationOptions {
         TargetCompilationOptions {
@@ -140,7 +140,7 @@ impl GpuBackend for NopGpuContext {
         })
     }
 
-    fn dispatch_schedule(&self, _schedule: &Self::Schedule) -> Result<(), Error> {
+    fn dispatch_schedule(&self, _schedule: &Self::Schedule<'_>) -> Result<(), Error> {
         Err(Error {
             msg: "using nop backend",
             kind: ErrorKind::UnsupportedFeature,
@@ -154,7 +154,7 @@ impl GpuBackend for NopGpuContext {
         _bindings: &[&Self::Buffer],
         _meta: &[u32],
         _meta_buf: &Self::MetaBuf,
-    ) -> Result<Self::Schedule, Error> {
+    ) -> Result<Self::Schedule<'_>, Error> {
         Err(Error {
             msg: "using nop backend",
             kind: ErrorKind::UnsupportedFeature,

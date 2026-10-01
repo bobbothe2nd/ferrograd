@@ -18,8 +18,9 @@ pub use rocm_rt::{
 };
 
 use core::ptr::from_ref;
+use std::marker::PhantomData;
 
-use briny::raw::cast::cast_slice;
+use briny::raw::cast::slice_to_bytes;
 
 use crate::{
     dispatch::{
@@ -81,20 +82,19 @@ impl GpuContext {
 
 impl GpuBackend for GpuContext {
     type Buffer = Buffer;
-    type MetaBuf = DevMappedAlloc;
+    type MetaBuf = Buffer;
     type Kernel = Kernel;
-    type Schedule = Schedule;
+    type Schedule<'a> = Schedule<'a>;
 
     fn alloc(&self, len: u32) -> Result<Self::Buffer, Error> {
         map_err!(self.device.alloc(len), "failed to allocate GPU buffer")
     }
 
     fn alloc_init(&self, data: &[u8]) -> Result<Self::Buffer, Error> {
-        let buf = self.alloc(data.len() as u32)?;
-
         let host_buf = unsafe { DevMapped::from_slice(data) };
-
         let just_mapped = unsafe { host_buf.map().is_ok() };
+
+        let buf = self.alloc(data.len() as u32)?;
 
         map_err!(
             host_buf.copy_to_dev(&buf, 0, 0, data.len()),
@@ -111,10 +111,25 @@ impl GpuBackend for GpuContext {
     }
 
     fn alloc_meta(&self, data: &[u32]) -> Result<Self::MetaBuf, Error> {
+        let data = slice_to_bytes(data);
+
+        let host_buf = unsafe { DevMapped::from_slice(data) };
+        let just_mapped = unsafe { host_buf.map().is_ok() };
+
+        let buf = self.alloc(data.len() as u32)?;
+
         map_err!(
-            DevMappedAlloc::new(cast_slice(data)),
-            "failed to allocate host buffer"
-        )
+            host_buf.copy_to_dev(&buf, 0, 0, data.len()),
+            "failed copying host to device"
+        )?;
+
+        if just_mapped {
+            unsafe {
+                map_err!(host_buf.unmap(), "failed to unmap device buffer")?;
+            }
+        }
+
+        Ok(buf)
     }
 
     fn compile(
@@ -225,7 +240,7 @@ impl GpuBackend for GpuContext {
         }
     }
 
-    fn dispatch_schedule(&self, schedule: &Self::Schedule) -> Result<(), Error> {
+    fn dispatch_schedule(&self, schedule: &Self::Schedule<'_>) -> Result<(), Error> {
         unsafe {
             map_err!(
                 self.stream.launch_graph(&schedule.graph),
@@ -234,13 +249,13 @@ impl GpuBackend for GpuContext {
         }
     }
 
-    fn schedule(
+    fn schedule<'a>(
         &self,
         mut kernels: Vec<Dependencies<Redirect<(Self::Kernel, NodeId, &[bool])>>>,
-        bindings: &[&Self::Buffer],
+        bindings: &[&'a Self::Buffer],
         meta: &[u32],
         meta_buf: &Self::MetaBuf,
-    ) -> Result<Self::Schedule, Error> {
+    ) -> Result<Self::Schedule<'a>, Error> {
         remap_kernels(&mut kernels);
         let kernels = topo_sort_indirect(&kernels)?;
 
@@ -250,6 +265,7 @@ impl GpuBackend for GpuContext {
         )?;
 
         let mut args = Vec::new();
+        let mut all_params = Vec::new();
 
         let mut nodes = Vec::<Node>::with_capacity(kernels.len());
 
@@ -278,7 +294,7 @@ impl GpuBackend for GpuContext {
                 kernel_args.push(from_ref(*binding) as *mut u8);
             }
 
-            let mut kernel_args = kernel_args.into_boxed_slice(); // not saving args
+            let mut kernel_args = kernel_args.into_boxed_slice();
 
             let iter_space = build_dims(kernel.iteration_space(), meta);
             let grid = calc_grid(&iter_space, *kernel.block());
@@ -298,7 +314,8 @@ impl GpuBackend for GpuContext {
                 "failed to add kernel node to graph"
             )?);
 
-            args.push(params_boxed);
+            args.push(kernel_args);
+            all_params.push(params_boxed);
         }
 
         let graph = map_err!(
@@ -306,7 +323,14 @@ impl GpuBackend for GpuContext {
             "failed to instantiate graph"
         )?;
 
-        Ok(Schedule { graph, _args: args })
+        map_err!(graph.upload(&self.stream), "failed to upload graph")?;
+
+        Ok(Schedule {
+            graph,
+            _params: all_params,
+            _args: args,
+            _marker: PhantomData,
+        })
     }
 
     fn is_ready(&self) -> Result<bool, Error> {
@@ -351,9 +375,11 @@ impl GpuBackend for GpuContext {
     }
 }
 
-pub struct Schedule {
+pub struct Schedule<'a> {
     graph: ExecGraph,
-    _args: Vec<Box<KernelParams>>,
+    _params: Vec<Box<KernelParams>>,
+    _args: Vec<Box<[*mut u8]>>,
+    _marker: PhantomData<&'a [Buffer]>,
 }
 
 impl GpuBufferBackend for Buffer {

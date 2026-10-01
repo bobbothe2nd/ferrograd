@@ -157,7 +157,7 @@ pub trait GpuBackend: Sized {
     type Buffer: GpuBufferBackend;
     type MetaBuf;
     type Kernel: GpuKernelBackend;
-    type Schedule;
+    type Schedule<'a>;
 
     /// The target-specific configuration for the compiler.
     fn target_spec(&self) -> TargetCompilationOptions;
@@ -218,13 +218,13 @@ pub trait GpuBackend: Sized {
     /// That avoids a LOT of submission overhead.
     ///
     /// On the default WGSL backend, this just calculating grids and flattening the graph.
-    fn schedule(
+    fn schedule<'a>(
         &self,
         kernels: Vec<Dependencies<Redirect<(Self::Kernel, NodeId, &[bool])>>>,
-        bindings: &[&Self::Buffer],
+        bindings: &[&'a Self::Buffer],
         meta: &[u32],
-        meta_buf: &Self::MetaBuf,
-    ) -> Result<Self::Schedule, Error>;
+        meta_buf: &'a Self::MetaBuf,
+    ) -> Result<Self::Schedule<'a>, Error>;
 
     /// Dispatchs/launches a kernel on this context
     fn dispatch_kernel(
@@ -236,7 +236,7 @@ pub trait GpuBackend: Sized {
     ) -> Result<(), Error>;
 
     /// Dispatches/launches a schedule on this context
-    fn dispatch_schedule(&self, schedule: &Self::Schedule) -> Result<(), Error>;
+    fn dispatch_schedule(&self, schedule: &Self::Schedule<'_>) -> Result<(), Error>;
 
     /// Synchronizes at least the work submitted by this context
     ///
@@ -299,8 +299,8 @@ pub struct KernelGroup<'a, B: GpuBackend = backend::GpuContext> {
 
 /// Schedule used to improve performance by caching critical launch information.
 pub struct Schedule<'a, B: GpuBackend = backend::GpuContext> {
-    forward: B::Schedule,
-    backward: B::Schedule,
+    forward: B::Schedule<'a>,
+    backward: B::Schedule<'a>,
     loss: LossSchedule<'a, B>,
     optim: OptimSchedule<'a, B>,
 }

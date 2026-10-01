@@ -146,7 +146,7 @@ impl GpuBackend for GpuContext {
     type Buffer = Buffer;
     type MetaBuf = Buffer;
     type Kernel = GpuKernel;
-    type Schedule = Schedule;
+    type Schedule<'a> = Schedule;
 
     fn target_spec(&self) -> TargetCompilationOptions {
         TargetCompilationOptions {
@@ -347,7 +347,7 @@ impl GpuBackend for GpuContext {
         bindings: &[&Self::Buffer],
         meta: &[u32],
         meta_buf: &Self::MetaBuf,
-    ) -> Result<Self::Schedule, Error> {
+    ) -> Result<Self::Schedule<'_>, Error> {
         let mut scheduled_kernels = Vec::new();
 
         eval_dependency_order(&kernels, |kernel, _, params| {
@@ -398,7 +398,7 @@ impl GpuBackend for GpuContext {
         })
     }
 
-    fn dispatch_schedule(&self, schedule: &Self::Schedule) -> Result<(), Error> {
+    fn dispatch_schedule(&self, schedule: &Self::Schedule<'_>) -> Result<(), Error> {
         let mut encoder = self
             .device
             .create_command_encoder(&CommandEncoderDescriptor { label: None });

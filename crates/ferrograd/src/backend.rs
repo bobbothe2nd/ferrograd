@@ -329,7 +329,7 @@ macro_rules! impl_op {
 impl GpuBackend for Dynamic {
     type Buffer = DynBuffer;
     type Kernel = DynKernel;
-    type Schedule = DynSchedule;
+    type Schedule<'a> = DynSchedule<'a>;
     type MetaBuf = DynMetaBuf;
 
     impl_op! {
@@ -354,7 +354,7 @@ impl GpuBackend for Dynamic {
             options: &CompilationOptions
         ) -> Result<Self::Kernel, Error>
         download(&self, buffer: &Self::Buffer, data: &mut [u8]) -> Result<(), Error>
-        dispatch_schedule(&self, schedule: &Self::Schedule) -> Result<(), Error>
+        dispatch_schedule(&self, schedule: &Self::Schedule<'_>) -> Result<(), Error>
         alloc(&self, len: u32) -> Result<Self::Buffer, Error>
         alloc_init(&self, init: &[u8]) -> Result<Self::Buffer, Error>
         alloc_meta(&self, data: &[u32]) -> Result<Self::MetaBuf, Error>
@@ -385,13 +385,13 @@ impl GpuBackend for Dynamic {
     }
 
     #[inline]
-    fn schedule(
+    fn schedule<'a>(
         &self,
         kernels: Vec<Dependencies<Redirect<(Self::Kernel, NodeId, &[bool])>>>,
-        bindings: &[&Self::Buffer],
+        bindings: &[&'a Self::Buffer],
         meta: &[u32],
-        meta_buf: &Self::MetaBuf,
-    ) -> Result<Self::Schedule, Error> {
+        meta_buf: &'a Self::MetaBuf,
+    ) -> Result<Self::Schedule<'a>, Error> {
         Ok(match self {
             Self::None(_) => ().into(),
             #[cfg(feature = "wgsl")]
@@ -442,31 +442,31 @@ macro_rules! impl_backend {
         #[allow(clippy::large_enum_variant)]
         $(#[$meta])?
         pub enum $name$(<$($lifetime),*>)? {
-            None($nop, $(PhantomData<$(&$lifetime ()),*>)?),
+            None($nop),
             #[cfg(feature = "wgsl")]
-            Wgsl(wgsl::$wgsl$(<$($lifetime),*>)?),
+            Wgsl(wgsl::$wgsl),
             #[cfg(feature = "rocm")]
             Rocm(rocm::$rocm$(<$($lifetime),*>)?),
         }
 
-        impl_backend!(@backend $name, $nop$(<$($lifetime),*>)? => None, self, "nop");
-        impl_backend!(@backend $name, $wgsl$(<$($lifetime),*>)? => Wgsl, wgsl, "WGSL", "wgsl");
-        impl_backend!(@backend $name, $rocm$(<$($lifetime),*>)? => Rocm, rocm, "ROCm", "rocm");
+        impl_backend!(@backend $name$(<$($lifetime),*>)?, $nop => None, self, "nop");
+        impl_backend!(@backend $name$(<$($lifetime),*>)?, $wgsl => Wgsl, wgsl, "WGSL", "wgsl");
+        impl_backend!(@backend $name$(<$($lifetime),*>)?, $rocm$(<$($lifetime),*>)? => Rocm, rocm, "ROCm", "rocm");
     };
 
-    (@backend $on_name:ident$(<$($lifetime:lifetime),*>)?, $name:ident => $backend:ident, $module:ident, $backend_fmt:literal$(, $feature:literal)?$(,)?) => {
+    (@backend $on_name:ident$(<$($lifetime1:lifetime),*>)?, $name:ident$(<$($lifetime2:lifetime),*>)? => $backend:ident, $module:ident, $backend_fmt:literal$(, $feature:literal)?$(,)?) => {
         $(#[cfg(feature = $feature)])?
-        impl$(<$($lifetime),*>)? From<$module::$name$(<$($lifetime),*>)?> for $on_name$(<$($lifetime),*>)? {
+        impl$(<$($lifetime1),*>)? From<$module::$name$(<$($lifetime2),*>)?> for $on_name$(<$($lifetime1),*>)? {
             #[inline]
-            fn from(value: $module::$name$(<$($lifetime),*>)?) -> Self {
+            fn from(value: $module::$name$(<$($lifetime2),*>)?) -> Self {
                 Self::$backend(value)
             }
         }
 
         $(#[cfg(feature = $feature)])?
-        impl$(<$($lifetime),*>)? From<$on_name$(<$($lifetime),*>)?> for $module::$name$(<$($lifetime),*>)? {
+        impl$(<$($lifetime1),*>)? From<$on_name$(<$($lifetime1),*>)?> for $module::$name$(<$($lifetime2),*>)? {
             #[inline]
-            fn from(value: $on_name$(<$($lifetime),*>)?) -> Self {
+            fn from(value: $on_name$(<$($lifetime1),*>)?) -> Self {
                 match value {
                     $on_name::$backend(ctx) => ctx,
                     _ => panic!(concat!("unsupported operation for ", $backend_fmt, " backend")),
@@ -475,9 +475,9 @@ macro_rules! impl_backend {
         }
 
         $(#[cfg(feature = $feature)])?
-        impl<'__a, $($($lifetime),*)?> From<&'__a $on_name$(<$($lifetime),*>)?> for &'__a $module::$name$(<$($lifetime),*>)? {
+        impl<'__a, $($($lifetime1),*)?> From<&'__a $on_name$(<$($lifetime1),*>)?> for &'__a $module::$name$(<$($lifetime2),*>)? {
             #[inline]
-            fn from(value: &'__a $on_name$(<$($lifetime),*>)?) -> Self {
+            fn from(value: &'__a $on_name$(<$($lifetime1),*>)?) -> Self {
                 match value {
                     $on_name::$backend(ctx) => ctx,
                     _ => panic!(concat!("unsupported operation for ", $backend_fmt, " backend")),
@@ -486,9 +486,9 @@ macro_rules! impl_backend {
         }
 
         $(#[cfg(feature = $feature)])?
-        impl<'__a, $($($lifetime),*)?> From<&'__a mut $on_name$(<$($lifetime),*>)?> for &'__a mut $module::$name$(<$($lifetime),*>)? {
+        impl<'__a, $($($lifetime1),*)?> From<&'__a mut $on_name$(<$($lifetime1),*>)?> for &'__a mut $module::$name$(<$($lifetime2),*>)? {
             #[inline]
-            fn from(value: &'__a mut $on_name$(<$($lifetime),*>)?) -> Self {
+            fn from(value: &'__a mut $on_name$(<$($lifetime1),*>)?) -> Self {
                 match value {
                     $on_name::$backend(ctx) => ctx,
                     _ => panic!(concat!("unsupported operation for ", $backend_fmt, " backend")),
@@ -549,5 +549,6 @@ impl GpuKernelBackend for DynKernel {
     }
 }
 
-impl_backend!(DynSchedule, Unit, Schedule, Schedule,);
-impl_backend!(DynMetaBuf, Unit, Buffer, DevMappedAlloc,);
+impl_backend!(DynSchedule<'a>, Unit, Schedule, Schedule,);
+
+impl_backend!(DynMetaBuf, Unit, Buffer, Buffer,);

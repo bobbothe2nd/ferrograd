@@ -1,4 +1,4 @@
-use briny::traits::{Pod, StableLayout};
+use briny::traits::Pod;
 use fused_gpu::dispatch::backend;
 
 macro_rules! id {
@@ -7,7 +7,6 @@ macro_rules! id {
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
         pub struct $name(pub(crate) $inner);
 
-        unsafe impl StableLayout for $name {}
         unsafe impl Pod for $name {}
 
         impl $name {
