@@ -255,6 +255,19 @@ impl GpuBackend for GpuContext {
         Ok(())
     }
 
+    fn schedule_parallel<'a>(
+        &self,
+        _kernel: &Self::Kernel,
+        _bindings: &[Vec<&'a Self::Buffer>],
+        _meta: &[u32],
+        _meta_buf: &Self::MetaBuf,
+    ) -> Result<Self::Schedule<'a>, Error>
+    {
+        // todo!()
+        let thing = core::mem::MaybeUninit::uninit();
+        Ok(unsafe { thing.assume_init() })
+    }
+
     fn schedule<'a>(
         &self,
         kernels: Vec<Dependencies<Redirect<(Self::Kernel, NodeId, &[bool])>>>,

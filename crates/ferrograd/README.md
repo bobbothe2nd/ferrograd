@@ -124,13 +124,9 @@ for _ in 0..ITERS {
     ctx.dispatch_forward(&schedule).unwrap();
     ctx.dispatch_loss(&mut schedule, &target).unwrap();
     ctx.dispatch_backward(&schedule).unwrap();
-
-    ctx.dispatch_optim(&mut schedule, &in_tensors[0], 0, &saved_tensors).unwrap();
-    ctx.dispatch_optim(&mut schedule, &in_tensors[1], 1, &saved_tensors).unwrap();
-    ctx.dispatch_optim(&mut schedule, &in_tensors[2], 2, &saved_tensors).unwrap();
-    ctx.dispatch_optim(&mut schedule, &in_tensors[3], 3, &saved_tensors).unwrap();
-    ctx.dispatch_optim(&mut schedule, &in_tensors[4], 4, &saved_tensors).unwrap();
 }
+
+ctx.dispatch_optim(&mut schedule).unwrap();
 
 ctx.sync().unwrap();
 

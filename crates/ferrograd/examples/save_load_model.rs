@@ -13,15 +13,15 @@ use std::time::{Duration, Instant};
 
 const PATH: &str = "data/v2f32_test.bpat";
 
-const ITERS: usize = 128;
-const EPOCHS: usize = 1;
+const ITERS: usize = 256;
+const EPOCHS_TO_SAVE: usize = 1;
 
 const LR: f32 = 1e-10;
 
 #[cfg(feature = "rocm")]
 const INTERVAL: Duration = Duration::from_millis(5);
 #[cfg(not(feature = "rocm"))]
-const INTERVAL: Duration = Duration::from_millis(50);
+const INTERVAL: Duration = Duration::from_millis(100);
 
 fn main() {
     const M: u32 = 768;
@@ -143,18 +143,9 @@ fn main() {
             ctx.dispatch_forward(&schedule).unwrap();
             ctx.dispatch_loss(&mut schedule, &target).unwrap();
             ctx.dispatch_backward(&schedule).unwrap();
-
-            ctx.dispatch_optim(&mut schedule, &in_tensors[0], 0, &saved_tensors)
-                .unwrap();
-            ctx.dispatch_optim(&mut schedule, &in_tensors[1], 1, &saved_tensors)
-                .unwrap();
-            ctx.dispatch_optim(&mut schedule, &in_tensors[2], 2, &saved_tensors)
-                .unwrap();
-            ctx.dispatch_optim(&mut schedule, &in_tensors[3], 3, &saved_tensors)
-                .unwrap();
-            ctx.dispatch_optim(&mut schedule, &in_tensors[4], 4, &saved_tensors)
-                .unwrap();
         }
+
+        // ctx.dispatch_optim(&mut schedule).unwrap();
 
         let telemetry = monitor.stop().unwrap();
 
@@ -167,7 +158,7 @@ fn main() {
                     accum_usage += usage;
                 }
 
-                if let Some(budget) = heap.budget
+                if let Some(budget) = heap.budget.or(heap.size)
                     && budget > max_budget
                 {
                     max_budget = budget;
@@ -182,7 +173,7 @@ fn main() {
         println!("\n  AVERAGE MEMORY USAGE: {}", avg_usage);
         println!(" MAXIMUM MEMORY BUDGET: {}\n", max_budget);
 
-        if epoch % EPOCHS == EPOCHS - 1 {
+        if epoch % EPOCHS_TO_SAVE == EPOCHS_TO_SAVE - 1 {
             ctx.sync().unwrap();
 
             ctx.save_tensors(PATH, &in_tensors, BpatHeader::BpatV2f32)

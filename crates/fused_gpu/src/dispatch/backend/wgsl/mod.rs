@@ -341,6 +341,51 @@ impl GpuBackend for GpuContext {
         })
     }
 
+    fn schedule_parallel<'a>(
+        &self,
+        kernel: &Self::Kernel,
+        bindings: &[Vec<&'a Self::Buffer>],
+        meta: &[u32],
+        meta_buf: &Self::MetaBuf,
+    ) -> Result<Self::Schedule<'a>, Error> {
+        let mut scheduled_kernels = Vec::new();
+
+        for bindings in bindings {
+            let iter_space = build_dims(kernel.iteration_space(), meta);
+            let grid = calc_grid(&iter_space, *kernel.block());
+
+            let kernel = &kernel.kernel;
+
+            let mut kernel_bindings =  Vec::with_capacity(1 + bindings.len());
+
+            kernel_bindings.push(BindGroupEntry {
+                binding: 0,
+                resource: meta_buf.as_entire_binding(),
+            });
+
+            bindings
+                .iter()
+                .enumerate()
+                .map(|(i, buf)| BindGroupEntry {
+                    binding: 1 + i as u32,
+                    resource: buf.as_entire_binding(),
+                })
+                .for_each(|entry| kernel_bindings.push(entry));
+
+            let bind_group = self.device.create_bind_group(&BindGroupDescriptor {
+                layout: &kernel.get_bind_group_layout(0),
+                entries: &kernel_bindings,
+                label: None,
+            });
+
+            scheduled_kernels.push((kernel.clone(), grid, bind_group));
+        }
+
+        Ok(Schedule {
+            kernels: scheduled_kernels,
+        })
+    }
+
     fn schedule(
         &self,
         kernels: Vec<Dependencies<Redirect<(Self::Kernel, NodeId, &[bool])>>>,

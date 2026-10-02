@@ -249,6 +249,19 @@ impl GpuBackend for GpuContext {
         }
     }
 
+    fn schedule_parallel<'a>(
+        &self,
+        _kernel: &Self::Kernel,
+        _bindings: &[Vec<&'a Self::Buffer>],
+        _meta: &[u32],
+        _meta_buf: &Self::MetaBuf,
+    ) -> Result<Self::Schedule<'a>, Error>
+    {
+        // todo!()
+        let thing = core::mem::MaybeUninit::uninit();
+        Ok(unsafe { thing.assume_init() })
+    }
+
     fn schedule<'a>(
         &self,
         mut kernels: Vec<Dependencies<Redirect<(Self::Kernel, NodeId, &[bool])>>>,
@@ -307,15 +320,17 @@ impl GpuBackend for GpuContext {
                     block: kernel.block,
                 },
             );
-            let params_boxed = Box::new(params);
+
+            all_params.push(params);
+
+            let params = &all_params[all_params.len() - 1];
 
             nodes[idx] = Some(map_err!(
-                graph.add_kernel_node(&[], &params_boxed),
+                graph.add_kernel_node(&dep, &params),
                 "failed to add kernel node to graph"
             )?);
 
             args.push(kernel_args);
-            all_params.push(params_boxed);
         }
 
         let graph = map_err!(
@@ -401,7 +416,7 @@ impl GpuBackend for GpuContext {
 
 pub struct Schedule<'a> {
     graph: ExecGraph,
-    _params: Box<[Box<KernelParams>]>,
+    _params: Box<[KernelParams]>,
     _args: Box<[Box<[*mut u8]>]>,
     _modules: Box<[Func]>,
     _marker: PhantomData<&'a [Buffer]>,

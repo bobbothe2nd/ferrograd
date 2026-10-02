@@ -126,6 +126,20 @@ impl GpuBackend for NopGpuContext {
         })
     }
 
+    fn schedule_parallel<'a>(
+        &self,
+        _kernel: &Self::Kernel,
+        _bindings: &[Vec<&'a Self::Buffer>],
+        _meta: &[u32],
+        _meta_buf: &Self::MetaBuf,
+    ) -> Result<Self::Schedule<'a>, Error> {
+        Err(Error {
+            msg: "using nop backend",
+            kind: ErrorKind::UnsupportedFeature,
+            ctx: (),
+        })
+    }
+
     fn dispatch_kernel(
         &self,
         _kernel: &Self::Kernel,

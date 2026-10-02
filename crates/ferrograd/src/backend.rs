@@ -205,22 +205,29 @@ impl<B: GpuBackend> GpuContext<B> {
         self.0.dispatch_backward(schedule)
     }
 
-    pub fn dispatch_loss(
+    pub fn dispatch_optim(
         &self,
         schedule: &mut Schedule<'_, B>,
-        target: &Tensor<B>,
     ) -> Result<(), Error> {
-        self.0.dispatch_loss(schedule, target)
+        self.0.dispatch_optim(schedule)
     }
 
-    pub fn dispatch_optim(
+    pub fn dispatch_single_optim(
         &self,
         schedule: &mut Schedule<'_, B>,
         weight: &Tensor<B>,
         grad: usize,
         tensors: &AllocTensors<B>,
     ) -> Result<(), Error> {
-        self.0.dispatch_optim(schedule, weight, grad, tensors)
+        self.0.dispatch_single_optim(schedule, weight, grad, tensors)
+    }
+
+    pub fn dispatch_loss(
+        &self,
+        schedule: &mut Schedule<'_, B>,
+        target: &Tensor<B>,
+    ) -> Result<(), Error> {
+        self.0.dispatch_loss(schedule, target)
     }
 
     #[inline]
@@ -408,7 +415,7 @@ impl GpuBackend for Dynamic {
                         dep: x.dep,
                     })
                     .collect::<Vec<_>>();
-                let bindings = bindings.iter().cloned().map(Into::into).collect::<Vec<_>>();
+                let bindings = bindings.iter().copied().map(Into::into).collect::<Vec<_>>();
 
                 ctx.schedule(kernels, &bindings, meta, meta_buf.into())?
                     .into()
@@ -427,9 +434,52 @@ impl GpuBackend for Dynamic {
                         dep: x.dep,
                     })
                     .collect::<Vec<_>>();
-                let bindings = bindings.iter().cloned().map(Into::into).collect::<Vec<_>>();
+                let bindings = bindings.iter().copied().map(Into::into).collect::<Vec<_>>();
 
                 ctx.schedule(kernels, &bindings, meta, meta_buf.into())?
+                    .into()
+            }
+        })
+    }
+
+    #[inline]
+    fn schedule_parallel<'a>(
+        &self,
+        kernel: &Self::Kernel,
+        bindings: &[Vec<&'a Self::Buffer>],
+        meta: &[u32],
+        meta_buf: &'a Self::MetaBuf,
+    ) -> Result<Self::Schedule<'a>, Error> {
+        Ok(match self {
+            Self::None(_) => ().into(),
+            #[cfg(feature = "wgsl")]
+            Self::Wgsl(ctx) => {
+                let bindings = bindings
+                    .iter()
+                    .map(|val| val
+                        .iter()
+                        .copied()
+                        .map(|binding| binding.into())
+                        .collect::<Vec<_>>()
+                    )
+                    .collect::<Vec<_>>();
+
+                ctx.schedule_parallel(kernel.into(), &bindings, meta, meta_buf.into())?
+                    .into()
+            }
+            #[cfg(feature = "rocm")]
+            Self::Rocm(ctx) => {
+                let bindings = bindings
+                    .iter()
+                    .map(|val| val
+                        .iter()
+                        .copied()
+                        .map(|binding| binding.into())
+                        .collect::<Vec<_>>()
+                    )
+                    .collect::<Vec<_>>();
+
+                ctx.schedule_parallel(kernel.into(), &bindings, meta, meta_buf.into())?
                     .into()
             }
         })

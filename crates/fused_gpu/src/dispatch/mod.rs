@@ -226,6 +226,15 @@ pub trait GpuBackend: Sized {
         meta_buf: &'a Self::MetaBuf,
     ) -> Result<Self::Schedule<'a>, Error>;
 
+    /// Schedules one kernel to be called multiple times for each chunk of bindings.
+    fn schedule_parallel<'a>(
+        &self,
+        kernel: &Self::Kernel,
+        bindings: &[Vec<&'a Self::Buffer>],
+        meta: &[u32],
+        meta_buf: &'a Self::MetaBuf,
+    ) -> Result<Self::Schedule<'a>, Error>;
+
     /// Dispatchs/launches a kernel on this context
     fn dispatch_kernel(
         &self,
@@ -314,7 +323,8 @@ struct LossSchedule<'a, B: GpuBackend> {
 
 struct OptimSchedule<'a, B: GpuBackend> {
     meta: &'a B::MetaBuf,
-    bindings: Vec<&'a B::Buffer>,
+    schedule: B::Schedule<'a>,
+    bindings: Box<[&'a B::Buffer]>,
     kernel: B::Kernel,
     state: &'a [B::Buffer],
 }
@@ -701,11 +711,11 @@ impl<B: GpuBackend> GpuContext<B> {
             &alloc_tensors.seed,
         ];
 
-        let meta = &alloc_tensors.meta;
+        let meta_buf = &alloc_tensors.meta;
 
         let loss = LossSchedule {
             grid,
-            meta,
+            meta: meta_buf,
             bindings,
             kernel: kernels.loss,
         };
@@ -716,9 +726,19 @@ impl<B: GpuBackend> GpuContext<B> {
             bindings.push(&alloc_tensors.seed);
         }
 
+        let all_bindings = in_tensors.iter().enumerate().map(|(grad, weight)| {
+            let mut bindings = bindings.clone();
+            bindings[0] = &weight.data.inner;
+            bindings[1] = &alloc_tensors.grad_tensors[grad];
+            bindings
+        }).collect::<Vec<_>>();
+
+        let optim_sched = self.inner.schedule_parallel(&kernels.optim, &all_bindings, meta, meta_buf)?;
+
         let optim = OptimSchedule {
-            meta,
-            bindings,
+            meta: meta_buf,
+            schedule: optim_sched,
+            bindings: bindings.into_boxed_slice(),
             kernel: kernels.optim,
             state,
         };
@@ -756,6 +776,14 @@ impl<B: GpuBackend> GpuContext<B> {
     }
 
     pub fn dispatch_optim(
+        &self,
+        schedule: &mut Schedule<'_, B>,
+    ) -> Result<(), Error> {
+        self.inner
+            .dispatch_schedule(&schedule.optim.schedule)
+    }
+
+    pub fn dispatch_single_optim(
         &self,
         schedule: &mut Schedule<'_, B>,
         weight: &Tensor<B>,
