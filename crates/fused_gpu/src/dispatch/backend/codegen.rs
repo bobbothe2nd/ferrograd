@@ -94,28 +94,28 @@ impl DType {
 impl Display for Axis {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.fmt_dim3())
+        f.write_char(self.fmt_dim3())
     }
 }
 
 impl Axis {
     #[inline]
     #[must_use]
-    pub const fn fmt_dim3(self) -> &'static str {
+    pub const fn fmt_dim3(self) -> char {
         match self {
-            Self::X => "x",
-            Self::Y => "y",
-            Self::Z => "z",
+            Self::X => 'x',
+            Self::Y => 'y',
+            Self::Z => 'z',
         }
     }
 
     #[inline]
     #[must_use]
-    pub const fn fmt_idx(self) -> &'static str {
+    pub const fn fmt_idx(self) -> char {
         match self {
-            Self::X => "0",
-            Self::Y => "1",
-            Self::Z => "2",
+            Self::X => '0',
+            Self::Y => '1',
+            Self::Z => '2',
         }
     }
 }
@@ -123,16 +123,18 @@ impl Axis {
 #[inline]
 pub fn newline(pretty_print: bool, out: &mut String, nesting: usize) {
     if pretty_print {
-        let _ = write!(out, "\n{}", "  ".repeat(nesting));
+        for _ in 0..(1 + nesting) {
+            out.push(' ');
+        }
     } else {
-        let _ = write!(out, " ");
+        out.push(' ');
     }
 }
 
 #[inline]
 pub fn tab(pretty_print: bool, out: &mut String) {
     if pretty_print {
-        let _ = write!(out, "  ");
+        out.push_str("  ");
     }
 }
 

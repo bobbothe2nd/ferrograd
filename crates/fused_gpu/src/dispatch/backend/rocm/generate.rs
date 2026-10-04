@@ -2,14 +2,12 @@ use log::debug;
 
 use crate::{
     dispatch::{
-        CompilationOptions, DebugCompilationOptions,
-        backend::{
+        CompilationOptions, DebugCompilationOptions, TargetFlags, backend::{
             DType, Op, Param, ParamTy, SharedAlloc, SimpleDType, ValueId,
             codegen::{self, def_var_c, newline},
             kernel::RawKernel,
         },
-    },
-    errors::Error,
+    }, errors::Error,
 };
 
 use core::fmt::Write;
@@ -25,11 +23,16 @@ pub fn generate_hip(
 #include <hip/hip_bfloat16.h>
 #include <hip/hip_fp16.h>
 #include <hip/hip_runtime.h>
-#include <hip/hip_wmma.h>
-
-using namespace hip::wmma;
 "
     .parse::<String>();
+
+    if options.target.flags.contains(TargetFlags::LIN_ACC) {
+        out.push_str("#include <hip/hip_wmma.h>
+
+using namespace hip::wmma;
+
+");
+    }
 
     let pretty_print = options
         .debug

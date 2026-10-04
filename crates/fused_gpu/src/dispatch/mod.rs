@@ -46,6 +46,9 @@ bitflags::bitflags! {
     pub struct TargetFlags: u8 {
         /// Support for linear algebra accelerator (e.g. matrix core via `wmma`/`mfma`)
         const LIN_ACC = 1 << 0;
+
+        /// Some targets dont support uninitialized immutable variables
+        const UNINIT_IMMUT = 1 << 1;
     }
 }
 

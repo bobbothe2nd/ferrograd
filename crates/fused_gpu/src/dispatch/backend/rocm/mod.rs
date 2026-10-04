@@ -163,7 +163,7 @@ impl GpuBackend for GpuContext {
     }
 
     fn target_spec(&self) -> TargetCompilationOptions {
-        let mut flags = TargetFlags::empty();
+        let mut flags = TargetFlags::UNINIT_IMMUT;
 
         let capabilities = self.arch.matrix_capabilities();
 

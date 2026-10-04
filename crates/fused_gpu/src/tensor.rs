@@ -53,6 +53,12 @@ pub fn calc_grid(shape: &[u32], block: [u32; 3]) -> [u32; 3] {
     }
 }
 
+#[derive(Debug, Clone, Copy, Hash)]
+pub struct Block {
+    dim: [u32; 3],
+    compute_tile: fn(&[u32], [u32; 3]) -> [u32; 3],
+}
+
 pub trait ToBuffer<B: GpuBackend> {
     fn to_buffer(self) -> B::Buffer;
     fn as_buffer(&self) -> &B::Buffer;
