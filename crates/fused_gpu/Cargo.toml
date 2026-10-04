@@ -21,7 +21,7 @@ telemetry = ["dep:gpu_telemetry"]
 
 [dependencies]
 gpu_telemetry = { version = "0.2", optional = true }
-briny = { version = "0.11.1", features = ["half", "alloc"] }
+briny = { version = "0.13.0", features = ["half", "alloc"] }
 bitflags = "2"
 half = "2"
 crc32fast = { version = "1.5", optional = true }
@@ -29,7 +29,7 @@ pollster = { version = "1", optional = true }
 log = "0.4.34"
 
 [dependencies.rocm-rt]
-version = "0.2.1"
+version = "0.2.2"
 features = [
   "dynamic-loading",
   "std",

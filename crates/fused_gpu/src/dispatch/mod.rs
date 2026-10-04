@@ -153,6 +153,8 @@ pub trait GpuKernelBackend {
 }
 
 /// Core GPU backend trait, defining a context which uses the GPU
+///
+/// Prefer returning [`InternalError`](`crate::errors::ErrorKind::InternalError`) over panicking
 pub trait GpuBackend: Sized {
     type Buffer: GpuBufferBackend;
     type MetaBuf;
@@ -164,6 +166,9 @@ pub trait GpuBackend: Sized {
 
     /// Allocates an uninitialized GPU buffer with the size `len` in bytes.
     fn alloc(&self, len: u32) -> Result<Self::Buffer, Error>;
+
+    /// Allocates an uninitialized GPU buffer with the size `len` in bytes.
+    fn alloc_zeroed(&self, len: u32) -> Result<Self::Buffer, Error>;
 
     /// Allocates a slice of `u8` (to be reinterpreted as larger datatypes).
     fn alloc_init(&self, data: &[u8]) -> Result<Self::Buffer, Error>;
@@ -182,7 +187,6 @@ pub trait GpuBackend: Sized {
         &self,
         buffer: &Self::Buffer,
         data: &[u8],
-        src_off: u32,
         dst_off: u32,
     ) -> Result<(), Error>;
 
@@ -198,7 +202,12 @@ pub trait GpuBackend: Sized {
     /// # Errors
     ///
     /// Should return an [`ErrorKind::FailedBufferCopy`](`crate::errors::ErrorKind::FailedBufferCopy`).
-    fn download(&self, buffer: &Self::Buffer, out: &mut [u8]) -> Result<(), Error>;
+    fn download(
+        &self,
+        buffer: &Self::Buffer,
+        out: &mut [u8],
+        src_off: u32,
+    ) -> Result<(), Error>;
 
     /// Compiles the `RawKernel` (containing ops+vars) to a GPU kernel ([`Self::Kernel`]).
     ///
@@ -459,9 +468,9 @@ impl<B: GpuBackend> GpuContext<B> {
     /// Failure is platform-specific and backend-dependent. It might only return an error
     /// if buffer lengths are unequal, but its behavior should not be assumed. Errors
     /// must be handled properly in critical code.
-    pub fn download<T: Pod, S: ToBuffer<B>>(&self, tensor: &S, dst: &mut [T]) -> Result<(), Error> {
+    pub fn download<T: Pod, S: ToBuffer<B>>(&self, tensor: &S, dst: &mut [T], src_off: u32) -> Result<(), Error> {
         self.inner
-            .download(tensor.as_buffer(), slice_to_bytes_mut(dst))
+            .download(tensor.as_buffer(), slice_to_bytes_mut(dst), src_off)
     }
 
     /// Copies the content of a CPU buffer into GPU buffer.
@@ -475,11 +484,10 @@ impl<B: GpuBackend> GpuContext<B> {
         &self,
         tensor: &S,
         dst: &[T],
-        src_off: u32,
         dst_off: u32,
     ) -> Result<(), Error> {
         self.inner
-            .upload(tensor.as_buffer(), slice_to_bytes(dst), src_off, dst_off)
+            .upload(tensor.as_buffer(), slice_to_bytes(dst), dst_off)
     }
 
     /// Copies the content of one buffer to another without mutating the source.
@@ -526,7 +534,7 @@ impl<B: GpuBackend> GpuContext<B> {
             }
 
             if save.is_defined_in_backward() {
-                let buf = self.inner.alloc(len)?;
+                let buf = self.inner.alloc_zeroed(len)?;
                 grad_tensors.push(buf);
 
                 state_tensors.reserve(total_grads);
@@ -536,7 +544,7 @@ impl<B: GpuBackend> GpuContext<B> {
                         StateDim::Const(value) => value,
                         StateDim::GradRelative(value) => len * value,
                     };
-                    let buf = self.inner.alloc(len)?;
+                    let buf = self.inner.alloc_zeroed(len)?;
 
                     state_tensors.push(buf);
                 }

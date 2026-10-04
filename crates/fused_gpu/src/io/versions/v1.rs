@@ -112,7 +112,7 @@ fn save_tensors<const U: usize, P: AsRef<Path>, F: Default + Pod + Clone, B: Gpu
 
         let mut buf = vec![0u8; size];
 
-        ctx.download(t, &mut buf).map_err(|err| Error {
+        ctx.download(t, &mut buf, 0).map_err(|err| Error {
             msg: err.msg,
             kind: err.kind,
             ctx: SerialTensorError::Unrelated,
@@ -255,7 +255,7 @@ macro_rules! impl_load {
 
                 tensor.shape = shape.into_boxed_slice();
 
-                ctx.upload(tensor, &data, 0, 0).map_err(|err| Error {
+                ctx.upload(tensor, &data, 0).map_err(|err| Error {
                     msg: err.msg,
                     kind: err.kind,
                     ctx: SerialTensorError::Unrelated,

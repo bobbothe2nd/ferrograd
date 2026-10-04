@@ -57,7 +57,7 @@ fn mul_add_optim() {
         ctx.init_tensor_f32(&[32, 32], &[1.0; 1024]).unwrap(),
     ];
 
-    ctx.upload(&saved_tensors.seed, &[1_f32; 1024], 0, 0)
+    ctx.upload(&saved_tensors.seed, &[1_f32; 1024], 0)
         .unwrap();
 
     let mut schedule = ctx
@@ -82,25 +82,25 @@ fn mul_add_optim() {
     let out_tensor = &saved_tensors.forward_out;
     let grad_tensors = &saved_tensors.grad_tensors;
 
-    ctx.download(out_tensor, &mut dst).unwrap();
+    ctx.download(out_tensor, &mut dst, 0).unwrap();
     assert!(dst.iter().all(|x| *x == 7.0));
 
-    ctx.download(&grad_tensors[0], &mut dst).unwrap();
+    ctx.download(&grad_tensors[0], &mut dst, 0).unwrap();
     assert!(dst.iter().all(|x| *x == 0.0));
 
-    ctx.download(&grad_tensors[1], &mut dst).unwrap();
+    ctx.download(&grad_tensors[1], &mut dst, 0).unwrap();
     assert!(dst.iter().all(|x| *x == 0.0));
 
-    ctx.download(&grad_tensors[2], &mut dst).unwrap();
+    ctx.download(&grad_tensors[2], &mut dst, 0).unwrap();
     assert!(dst.iter().all(|x| *x == 0.0));
 
-    ctx.download(&in_tensors[0], &mut dst).unwrap();
+    ctx.download(&in_tensors[0], &mut dst, 0).unwrap();
     assert!(dst.iter().all(|x| *x == 3.0 - 2e-3));
 
-    ctx.download(&in_tensors[1], &mut dst).unwrap();
+    ctx.download(&in_tensors[1], &mut dst, 0).unwrap();
     assert!(dst.iter().all(|x| *x == 2.0 - 3e-3));
 
-    ctx.download(&in_tensors[2], &mut dst).unwrap();
+    ctx.download(&in_tensors[2], &mut dst, 0).unwrap();
     assert!(dst.iter().all(|x| *x == 1.0 - 1e-3));
 }
 
@@ -155,7 +155,7 @@ fn mul_add_separate_optim() {
         ctx.init_tensor_f32(&[32, 32], &[1.0; 1024]).unwrap(),
     ];
 
-    ctx.upload(&saved_tensors.seed, &[1_f32; 1024], 0, 0)
+    ctx.upload(&saved_tensors.seed, &[1_f32; 1024], 0)
         .unwrap();
 
     let mut schedule = ctx
@@ -186,24 +186,24 @@ fn mul_add_separate_optim() {
     let out_tensor = &saved_tensors.forward_out;
     let grad_tensors = &saved_tensors.grad_tensors;
 
-    ctx.download(out_tensor, &mut dst).unwrap();
+    ctx.download(out_tensor, &mut dst, 0).unwrap();
     assert!(dst.iter().all(|x| *x == 7.0));
 
-    ctx.download(&grad_tensors[0], &mut dst).unwrap();
+    ctx.download(&grad_tensors[0], &mut dst, 0).unwrap();
     assert!(dst.iter().all(|x| *x == 0.0));
 
-    ctx.download(&grad_tensors[1], &mut dst).unwrap();
+    ctx.download(&grad_tensors[1], &mut dst, 0).unwrap();
     assert!(dst.iter().all(|x| *x == 0.0));
 
-    ctx.download(&grad_tensors[2], &mut dst).unwrap();
+    ctx.download(&grad_tensors[2], &mut dst, 0).unwrap();
     assert!(dst.iter().all(|x| *x == 0.0));
 
-    ctx.download(&in_tensors[0], &mut dst).unwrap();
+    ctx.download(&in_tensors[0], &mut dst, 0).unwrap();
     assert!(dst.iter().all(|x| *x == 3.0 - 2e-3));
 
-    ctx.download(&in_tensors[1], &mut dst).unwrap();
+    ctx.download(&in_tensors[1], &mut dst, 0).unwrap();
     assert!(dst.iter().all(|x| *x == 2.0 - 3e-3));
 
-    ctx.download(&in_tensors[2], &mut dst).unwrap();
+    ctx.download(&in_tensors[2], &mut dst, 0).unwrap();
     assert!(dst.iter().all(|x| *x == 1.0 - 1e-3));
 }

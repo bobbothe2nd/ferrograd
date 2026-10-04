@@ -231,8 +231,8 @@ impl<B: GpuBackend> GpuContext<B> {
     }
 
     #[inline]
-    pub fn download<T: Pod, S: ToBuffer<B>>(&self, tensor: &S, dst: &mut [T]) -> Result<(), Error> {
-        self.0.download(tensor, dst)
+    pub fn download<T: Pod, S: ToBuffer<B>>(&self, tensor: &S, dst: &mut [T], src_off: u32) -> Result<(), Error> {
+        self.0.download(tensor, dst, src_off)
     }
 
     #[inline]
@@ -240,10 +240,9 @@ impl<B: GpuBackend> GpuContext<B> {
         &self,
         tensor: &S,
         src: &[T],
-        src_off: u32,
         dst_off: u32,
     ) -> Result<(), Error> {
-        self.0.upload(tensor, src, src_off, dst_off)
+        self.0.upload(tensor, src, dst_off)
     }
 
     #[inline]
@@ -258,6 +257,26 @@ impl<B: GpuBackend> GpuContext<B> {
         options: &CompilationOptions,
     ) -> Result<GpuKernelGroup<'a, B>, Error> {
         self.0.compile(ir, options)
+    }
+
+    #[inline]
+    pub fn new_tensor_bf16(&self, shape: &[u32]) -> Result<Tensor<B>, Error> {
+        self.0.new_tensor::<16>(shape)
+    }
+
+    #[inline]
+    pub fn new_tensor_f16(&self, shape: &[u32]) -> Result<Tensor<B>, Error> {
+        self.0.new_tensor::<16>(shape)
+    }
+
+    #[inline]
+    pub fn new_tensor_f32(&self, shape: &[u32]) -> Result<Tensor<B>, Error> {
+        self.0.new_tensor::<32>(shape)
+    }
+
+    #[inline]
+    pub fn new_tensor_f64(&self, shape: &[u32]) -> Result<Tensor<B>, Error> {
+        self.0.new_tensor::<64>(shape)
     }
 
     #[inline]
@@ -350,7 +369,6 @@ impl GpuBackend for Dynamic {
             &self,
             buffer: &Self::Buffer,
             data: &[u8],
-            src_off: u32,
             dst_off: u32
         ) -> Result<(), Error>
         copy(&self, src: &Self::Buffer, dst: &Self::Buffer) -> Result<(), Error>
@@ -360,9 +378,10 @@ impl GpuBackend for Dynamic {
             params: &[Param],
             options: &CompilationOptions
         ) -> Result<Self::Kernel, Error>
-        download(&self, buffer: &Self::Buffer, data: &mut [u8]) -> Result<(), Error>
+        download(&self, buffer: &Self::Buffer, data: &mut [u8], src_off: u32) -> Result<(), Error>
         dispatch_schedule(&self, schedule: &Self::Schedule<'_>) -> Result<(), Error>
         alloc(&self, len: u32) -> Result<Self::Buffer, Error>
+        alloc_zeroed(&self, len: u32) -> Result<Self::Buffer, Error>
         alloc_init(&self, init: &[u8]) -> Result<Self::Buffer, Error>
         alloc_meta(&self, data: &[u32]) -> Result<Self::MetaBuf, Error>
     }

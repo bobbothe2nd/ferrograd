@@ -116,34 +116,30 @@ pub fn lower_optim(graph: &Graph, meta: Metadata) -> Result<Kernel, Error> {
     );
 
     let lr = kernel.raw.def_var(
-        DType::Simple(SimpleDType::F32),
-        ValueState::Immut,
+        DType::Simple(SimpleDType::U32),
+        ValueState::Inline,
         Some(Op::ReadMeta { param: 0, field: 0 }),
     );
+    let lr = kernel.raw.def_var(
+        DType::Simple(SimpleDType::F32),
+        ValueState::Immut,
+        Some(Op::BitCast { id: lr, dtype: DType::Simple(SimpleDType::F32) }),
+    );
 
-    let lr_normalized = match dtype {
-        SimpleDType::F16 => kernel.raw.def_var(
+    let lr = if dtype == SimpleDType::F32 {
+        lr
+    } else {
+        kernel.raw.def_var(
             DType::Simple(dtype),
             ValueState::Immut,
-            Some(Op::CastF16 { id: lr }),
-        ),
-        SimpleDType::BF16 => kernel.raw.def_var(
-            DType::Simple(dtype),
-            ValueState::Immut,
-            Some(Op::CastBF16 { id: lr }),
-        ),
-        SimpleDType::F64 => kernel.raw.def_var(
-            DType::Simple(dtype),
-            ValueState::Immut,
-            Some(Op::CastF64 { id: lr }),
-        ),
-        _ => lr,
+            Some(Op::Cast { id: lr, dtype: DType::Simple(dtype) }),
+        )
     };
 
     (graph.optim.lower)(
         &mut kernel,
         dtype,
-        lr_normalized,
+        lr,
         weight_param,
         grad_param,
         gid,

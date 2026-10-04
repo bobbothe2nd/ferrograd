@@ -1,5 +1,6 @@
 #![allow(unsafe_code)]
 
+use rocm_rt::hip::module::Module;
 pub use rocm_rt::{
     hip::{
         HipError,
@@ -24,19 +25,12 @@ use briny::raw::cast::slice_to_bytes;
 
 use crate::{
     dispatch::{
-        CompilationOptions, GpuBackend, GpuBufferBackend, GpuKernelBackend,
-        TargetCompilationOptions, TargetFlags,
-        backend::{
-            MetaId, NodeId, Param,
-            kernel::{
-                Dependencies, RawKernel, Redirect,
-                remap::{remap_kernels, topo_sort_indirect},
-            },
-            rocm::generate::generate_hip,
+        CompilationOptions, GpuBackend, GpuBufferBackend, GpuKernelBackend, TargetCompilationOptions, TargetFlags, backend::{
+            MetaId, NodeId, Param, kernel::{
+                Dependencies, RawKernel, Redirect, remap::eval_dependency_order,
+            }, rocm::generate::generate_hip,
         },
-    },
-    errors::{Error, ErrorKind},
-    tensor::{build_dims, calc_grid},
+    }, errors::{Error, ErrorKind}, tensor::{build_dims, calc_grid},
 };
 
 pub mod generate;
@@ -88,6 +82,10 @@ impl GpuBackend for GpuContext {
 
     fn alloc(&self, len: u32) -> Result<Self::Buffer, Error> {
         map_err!(self.device.alloc(len), "failed to allocate GPU buffer")
+    }
+
+    fn alloc_zeroed(&self, len: u32) -> Result<Self::Buffer, Error> {
+        map_err!(self.device.alloc_zeroed(len), "failed to allocate GPU buffer")
     }
 
     fn alloc_init(&self, data: &[u8]) -> Result<Self::Buffer, Error> {
@@ -240,7 +238,10 @@ impl GpuBackend for GpuContext {
         }
     }
 
-    fn dispatch_schedule(&self, schedule: &Self::Schedule<'_>) -> Result<(), Error> {
+    fn dispatch_schedule(
+        &self,
+        schedule: &Self::Schedule<'_>,
+    ) -> Result<(), Error> {
         unsafe {
             map_err!(
                 self.stream.launch_graph(&schedule.graph),
@@ -251,123 +252,79 @@ impl GpuBackend for GpuContext {
 
     fn schedule_parallel<'a>(
         &self,
-        _kernel: &Self::Kernel,
-        _bindings: &[Vec<&'a Self::Buffer>],
-        _meta: &[u32],
-        _meta_buf: &Self::MetaBuf,
-    ) -> Result<Self::Schedule<'a>, Error>
-    {
-        // todo!()
-        let thing = core::mem::MaybeUninit::uninit();
-        Ok(unsafe { thing.assume_init() })
+        kernel: &Self::Kernel,
+        bindings: &[Vec<&'a Self::Buffer>],
+        meta: &[u32],
+        meta_buf: &Self::MetaBuf,
+    ) -> Result<Self::Schedule<'a>, Error> {
+        self.stream.start_capture(rocm_rt::hip::graph::StreamCaptureMode::Global).unwrap();
+
+        let mut scheduled_kernels = Vec::new();
+
+        let iter_space = build_dims(kernel.iteration_space(), meta);
+        let grid = calc_grid(&iter_space, *kernel.block());
+
+        for bindings in bindings {
+            let mut kernel_bindings =  Vec::with_capacity(1 + bindings.len());
+
+            kernel_bindings.push(from_ref(meta_buf) as *mut u8);
+
+            for binding in bindings {
+                kernel_bindings.push(from_ref(*binding) as *mut u8);
+            }
+
+            scheduled_kernels.push((kernel.clone(), grid, kernel_bindings.into_boxed_slice()));
+        }
+
+        Ok(Schedule {
+            graph: self.stream.end_capture().unwrap().init(GraphInstantiateFlags::empty()).unwrap(),
+            _kernels: vec![kernel.func.module_handle()],
+            _marker: PhantomData,
+        })
     }
 
     fn schedule<'a>(
         &self,
-        mut kernels: Vec<Dependencies<Redirect<(Self::Kernel, NodeId, &[bool])>>>,
+        kernels: Vec<Dependencies<Redirect<(Self::Kernel, NodeId, &[bool])>>>,
         bindings: &[&'a Self::Buffer],
         meta: &[u32],
-        meta_buf: &Self::MetaBuf,
+        meta_buf: &'a Self::MetaBuf,
     ) -> Result<Self::Schedule<'a>, Error> {
-        remap_kernels(&mut kernels);
-        let kernels = topo_sort_indirect(&kernels)?;
+        self.stream.start_capture(rocm_rt::hip::graph::StreamCaptureMode::Global).unwrap();
 
-        let mut graph = map_err!(
-            Graph::new(GraphInstantiateFlags::empty()),
-            "failed to create graph"
-        )?;
-
-        let mut args = Vec::new();
-        let mut all_params = Vec::new();
-
-        let mut nodes: Vec<Option<Node>> = vec![None; kernels.len()];
-
-        for (idx, kernel) in kernels.iter().enumerate() {
-            let dep = kernel.dep.iter().map(|dep| nodes[*dep].clone().unwrap()).collect::<Vec<_>>();
-
-            let kernel = match &kernel.val {
-                Redirect::Unmasked(kernel_data) => &kernel_data.0,
-                Redirect::Redirected(idx) => match &kernels[*idx].val {
-                    Redirect::Unmasked(kernel) => &kernel.0,
-                    Redirect::Redirected(_) => {
-                        return Err(Error {
-                            msg: "double redirection or loop encountered in kernel resolution",
-                            kind: ErrorKind::UnresolvedRedirection,
-                            ctx: (),
-                        });
-                    }
-                },
-            };
+        eval_dependency_order(&kernels, |kernel, _, params| {
+            let iter_space = build_dims(kernel.iteration_space(), meta);
+            let grid = calc_grid(&iter_space, *kernel.block());
 
             let mut kernel_args = Vec::with_capacity(1 + bindings.len());
 
             kernel_args.push(from_ref(meta_buf) as *mut u8);
 
-            for binding in bindings {
+            for (_, binding) in bindings.iter().enumerate().filter(|(i, _)| params[1 + *i]) {
                 kernel_args.push(from_ref(*binding) as *mut u8);
             }
 
-            let mut kernel_args = kernel_args.into_boxed_slice();
-
-            let iter_space = build_dims(kernel.iteration_space(), meta);
-            let grid = calc_grid(&iter_space, *kernel.block());
-
-            let params = KernelParams::new(
-                &kernel.func,
-                &mut kernel_args,
-                LaunchConfig {
-                    grid,
-                    block: kernel.block,
-                },
-            );
-
-            all_params.push(params);
-
-            let params = &all_params[all_params.len() - 1];
-
-            nodes[idx] = Some(map_err!(
-                graph.add_kernel_node(&dep, &params),
-                "failed to add kernel node to graph"
-            )?);
-
-            args.push(kernel_args);
-        }
-
-        let graph = map_err!(
-            graph.init(GraphInstantiateFlags::empty()),
-            "failed to instantiate graph"
-        )?;
-
-        map_err!(graph.upload(&self.stream), "failed to upload graph")?;
-
-        let mut modules = Vec::with_capacity(kernels.len());
-
-        for kernel in &kernels {
-            let func = match &kernel.val {
-                Redirect::Unmasked(kernel) => kernel,
-                Redirect::Redirected(idx) => match &kernels[*idx].val {
-                    Redirect::Unmasked(kernel) => kernel,
-                    Redirect::Redirected(_) => {
-                        return Err(Error {
-                            msg: "double redirection or loop encountered in kernel resolution",
-                            kind: ErrorKind::UnresolvedRedirection,
-                            ctx: (),
-                        });
-                    }
-                },
+            unsafe {
+                self.stream.launch(&kernel.func, &mut kernel_args, LaunchConfig { grid, block: kernel.block }).unwrap();
             }
-            .0
-            .func
-            .clone();
 
-            modules.push(func);
+            Ok(())
+        })?;
+
+        let graph = self.stream.end_capture().unwrap().init(GraphInstantiateFlags::empty()).unwrap();
+
+        unsafe {
+            map_err!(
+                self.stream.launch_graph(&graph),
+                "failed to launch graph"
+            )?;
         }
+
+        self.stream.sync().unwrap();
 
         Ok(Schedule {
             graph,
-            _params: all_params.into_boxed_slice(),
-            _args: args.into_boxed_slice(),
-            _modules: modules.into_boxed_slice(),
+            _kernels: kernels.iter().filter_map(|kernel| if let Redirect::Unmasked((kernel, ..)) = &kernel.val { Some(kernel.func.module_handle()) } else { None }).collect(),
             _marker: PhantomData,
         })
     }
@@ -416,9 +373,7 @@ impl GpuBackend for GpuContext {
 
 pub struct Schedule<'a> {
     graph: ExecGraph,
-    _params: Box<[KernelParams]>,
-    _args: Box<[Box<[*mut u8]>]>,
-    _modules: Box<[Func]>,
+    _kernels: Vec<Module>,
     _marker: PhantomData<&'a [Buffer]>,
 }
 

@@ -55,10 +55,12 @@ impl SimpleDType {
 impl DType {
     #[inline]
     #[must_use]
-    pub const fn fmt_c(self) -> &'static str {
+    pub fn fmt_c(self) -> String {
         match self {
-            Self::Simple(dtype) => dtype.fmt_c(),
-            _ => todo!(),
+            Self::Simple(dtype) => dtype.fmt_c().to_string(),
+            Self::MmaA { dtype, m, n, k } => format!("fragment<matrix_a, {m}, {n}, {k}, {}, row_major>", dtype.fmt_c()),
+            Self::MmaB { dtype, m, n, k } => format!("fragment<matrix_b, {m}, {n}, {k}, {}, col_major>", dtype.fmt_c()),
+            Self::MmaAccum { dtype, m, n, k } => format!("fragment<accumulator, {m}, {n}, {k}, {}>", dtype.fmt_c()),
         }
     }
 
@@ -92,14 +94,14 @@ impl DType {
 impl Display for Axis {
     #[inline]
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.fmt_vec3())
+        f.write_str(self.fmt_dim3())
     }
 }
 
 impl Axis {
     #[inline]
     #[must_use]
-    pub const fn fmt_vec3(self) -> &'static str {
+    pub const fn fmt_dim3(self) -> &'static str {
         match self {
             Self::X => "x",
             Self::Y => "y",

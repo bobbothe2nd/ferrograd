@@ -124,7 +124,7 @@ fn main() {
             .unwrap(),
     ];
 
-    ctx.upload(&saved_tensors.seed, &[1_f32; (H * H) as usize], 0, 0)
+    ctx.upload(&saved_tensors.seed, &[1_f32; (H * H) as usize], 0)
         .unwrap();
 
     let tensor_elapsed = tensor_start.elapsed();

@@ -165,6 +165,30 @@ impl GpuBackend for GpuContext {
     }
 
     #[inline]
+    fn alloc_zeroed(&self, len: u32) -> Result<Self::Buffer, Error> {
+        let buffer = self.device.create_buffer(&BufferDescriptor {
+            label: None,
+            size: len as u64,
+            usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC | BufferUsages::COPY_DST,
+            mapped_at_creation: true,
+        });
+
+        buffer
+            .slice(..)
+            .get_mapped_range_mut()
+            .map_err(|_| Error {
+                msg: "failed to zero buffer",
+                kind: ErrorKind::InternalError,
+                ctx: (),
+            })?
+            .slice(..)
+            .fill(0);
+        buffer.unmap();
+
+        Ok(buffer)
+    }
+
+    #[inline]
     fn alloc_init(&self, contents: &[u8]) -> Result<Self::Buffer, Error> {
         Ok(self.device.create_buffer_init(&BufferInitDescriptor {
             label: None,
@@ -192,12 +216,11 @@ impl GpuBackend for GpuContext {
         &self,
         buffer: &Self::Buffer,
         data: &[u8],
-        src_off: u32,
         dst_off: u32,
     ) -> Result<(), Error> {
-        if buffer.size_bytes().saturating_sub(dst_off) as usize > data.len() {
+        if (buffer.size_bytes().saturating_sub(dst_off) as usize) < data.len() {
             return Err(Error {
-                msg: "CPU buffer of smaller size than GPU buffer during upload",
+                msg: "GPU buffer of smaller size than CPU buffer during upload",
                 kind: ErrorKind::FailedBufferCopy,
                 ctx: (),
             });
@@ -213,7 +236,7 @@ impl GpuBackend for GpuContext {
         });
         encoder.copy_buffer_to_buffer(
             &src,
-            src_off as u64,
+            0,
             buffer,
             dst_off as u64,
             Some(data.len() as u64),
@@ -247,7 +270,12 @@ impl GpuBackend for GpuContext {
     }
 
     #[inline]
-    fn download(&self, buffer: &Self::Buffer, data: &mut [u8]) -> Result<(), Error> {
+    fn download(
+        &self,
+        buffer: &Self::Buffer,
+        out: &mut [u8],
+        src_off: u32,
+    ) -> Result<(), Error> {
         let mut encoder = self
             .device
             .create_command_encoder(&CommandEncoderDescriptor::default());
@@ -259,7 +287,7 @@ impl GpuBackend for GpuContext {
         });
         encoder.copy_buffer_to_buffer(buffer, 0, &dst, 0, buffer.size());
         let submission_index = self.queue.submit(Some(encoder.finish()));
-        let buffer_slice = dst.slice(..);
+        let buffer_slice = dst.slice((src_off as u64)..);
 
         let (send, recv) = std::sync::mpsc::channel();
         buffer_slice.map_async(wgpu::MapMode::Read, move |res| {
@@ -275,9 +303,9 @@ impl GpuBackend for GpuContext {
 
         let _ = recv.recv();
 
-        let len = data.len().min(buffer.size_bytes() as usize);
+        let len = out.len().min(buffer.size_bytes() as usize);
 
-        data[..len].copy_from_slice(
+        out[..len].copy_from_slice(
             &buffer_slice.get_mapped_range().map_err(|_| Error {
                 msg: "failed to map GPU memory to CPU",
                 kind: ErrorKind::FailedBufferCopy,
@@ -350,12 +378,12 @@ impl GpuBackend for GpuContext {
     ) -> Result<Self::Schedule<'a>, Error> {
         let mut scheduled_kernels = Vec::new();
 
+        let iter_space = build_dims(kernel.iteration_space(), meta);
+        let grid = calc_grid(&iter_space, *kernel.block());
+
+        let kernel = &kernel.kernel;
+
         for bindings in bindings {
-            let iter_space = build_dims(kernel.iteration_space(), meta);
-            let grid = calc_grid(&iter_space, *kernel.block());
-
-            let kernel = &kernel.kernel;
-
             let mut kernel_bindings =  Vec::with_capacity(1 + bindings.len());
 
             kernel_bindings.push(BindGroupEntry {

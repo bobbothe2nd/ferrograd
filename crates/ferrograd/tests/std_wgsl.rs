@@ -57,7 +57,7 @@ fn mul_add_forward_backward() {
         ctx.init_tensor_f32(&[32, 32], &[1.0; 1024]).unwrap(),
     ];
 
-    ctx.upload(&saved_tensors.seed, &[1_f32; 1024], 0, 0)
+    ctx.upload(&saved_tensors.seed, &[1_f32; 1024], 0)
         .unwrap();
 
     let schedule = ctx
@@ -81,16 +81,16 @@ fn mul_add_forward_backward() {
     let out_tensor = &saved_tensors.forward_out;
     let grad_tensors = &saved_tensors.grad_tensors;
 
-    ctx.download(out_tensor, &mut dst).unwrap();
+    ctx.download(out_tensor, &mut dst, 0).unwrap();
     assert!(dst.iter().all(|x| *x == 7.0));
 
-    ctx.download(&grad_tensors[0], &mut dst).unwrap();
+    ctx.download(&grad_tensors[0], &mut dst, 0).unwrap();
     assert!(dst.iter().all(|x| *x == 2.0));
 
-    ctx.download(&grad_tensors[1], &mut dst).unwrap();
+    ctx.download(&grad_tensors[1], &mut dst, 0).unwrap();
     assert!(dst.iter().all(|x| *x == 3.0));
 
-    ctx.download(&grad_tensors[2], &mut dst).unwrap();
+    ctx.download(&grad_tensors[2], &mut dst, 0).unwrap();
     assert!(dst.iter().all(|x| *x == 1.0));
 }
 
@@ -147,7 +147,7 @@ fn matmul_sub_softmax_forward_backward() {
         ctx.init_tensor_f32(&[16, 64], &[1.0; 1024]).unwrap(),
     ];
 
-    ctx.upload(&saved_tensors.seed, &[1.0_f32; 1024], 0, 0)
+    ctx.upload(&saved_tensors.seed, &[1.0_f32; 1024], 0)
         .unwrap();
 
     let schedule = ctx
@@ -171,18 +171,18 @@ fn matmul_sub_softmax_forward_backward() {
     let out_tensor = &saved_tensors.forward_out;
     let grad_tensors = &saved_tensors.grad_tensors;
 
-    ctx.download(out_tensor, &mut dst).unwrap();
+    ctx.download(out_tensor, &mut dst, 0).unwrap();
     let download = &dst[..1024];
     assert!(download.iter().all(|x| *x == 1.0 / 64.0));
 
-    ctx.download(&grad_tensors[0], &mut dst).unwrap();
+    ctx.download(&grad_tensors[0], &mut dst, 0).unwrap();
     let download = &dst[..512];
     assert!(download.iter().all(|x| *x == 0.0));
 
-    ctx.download(&grad_tensors[1], &mut dst).unwrap();
+    ctx.download(&grad_tensors[1], &mut dst, 0).unwrap();
     assert!(dst.iter().all(|x| *x == 0.0));
 
-    ctx.download(&grad_tensors[2], &mut dst).unwrap();
+    ctx.download(&grad_tensors[2], &mut dst, 0).unwrap();
     let download = &dst[..1024];
     assert!(download.iter().all(|x| *x == 0.0));
 }
@@ -234,7 +234,7 @@ fn div_const_softmax_forward_backward() {
 
     let in_tensors = [ctx.init_tensor_f32(&[16, 32], &[3.0; 512]).unwrap()];
 
-    ctx.upload(&saved_tensors.seed, &[1_f32; 512], 0, 0)
+    ctx.upload(&saved_tensors.seed, &[1_f32; 512], 0)
         .unwrap();
 
     let schedule = ctx
@@ -258,11 +258,11 @@ fn div_const_softmax_forward_backward() {
     let out_tensor = &saved_tensors.forward_out;
     let grad_tensors = &saved_tensors.grad_tensors;
 
-    ctx.download(out_tensor, &mut dst).unwrap();
+    ctx.download(out_tensor, &mut dst, 0).unwrap();
     println!("{:?}", &dst[..64]);
     assert!(dst.iter().all(|x| *x == 2.0 + (1.0 / 32.0)));
 
-    ctx.download(&grad_tensors[0], &mut dst).unwrap();
+    ctx.download(&grad_tensors[0], &mut dst, 0).unwrap();
     assert!(dst.iter().all(|x| *x == 0.0));
 }
 
@@ -329,7 +329,7 @@ fn matmul_add_forward_backward() {
             .unwrap(),
     ];
 
-    ctx.upload(&saved_tensors.seed, &[1_f32; (M * N) as usize], 0, 0)
+    ctx.upload(&saved_tensors.seed, &[1_f32; (M * N) as usize], 0)
         .unwrap();
 
     let schedule = ctx
@@ -353,7 +353,7 @@ fn matmul_add_forward_backward() {
     let out_tensor = &saved_tensors.forward_out;
     let grad_tensors = &saved_tensors.grad_tensors;
 
-    ctx.download(out_tensor, &mut dst).unwrap();
+    ctx.download(out_tensor, &mut dst, 0).unwrap();
     let download = &dst[..(M * N) as usize];
     assert!(
         download
@@ -361,15 +361,15 @@ fn matmul_add_forward_backward() {
             .all(|x| *x == (A_VAL * B_VAL * K as f32) + C_VAL)
     );
 
-    ctx.download(&grad_tensors[0], &mut dst).unwrap();
+    ctx.download(&grad_tensors[0], &mut dst, 0).unwrap();
     let download = &dst[..(M * K) as usize];
     assert!(download.iter().all(|x| *x == B_VAL * N as f32));
 
-    ctx.download(&grad_tensors[1], &mut dst).unwrap();
+    ctx.download(&grad_tensors[1], &mut dst, 0).unwrap();
     let download = &dst[..(K * N) as usize];
     assert!(download.iter().all(|x| *x == A_VAL * M as f32));
 
-    ctx.download(&grad_tensors[2], &mut dst).unwrap();
+    ctx.download(&grad_tensors[2], &mut dst, 0).unwrap();
     let download = &dst[..(M * N) as usize];
     assert!(download.iter().all(|x| *x == 1.0));
 }
@@ -458,7 +458,7 @@ fn matmul_chain3_forward_backward() {
             .unwrap(),
     ];
 
-    ctx.upload(&saved_tensors.seed, &[1_f32; (H * H) as usize], 0, 0)
+    ctx.upload(&saved_tensors.seed, &[1_f32; (H * H) as usize], 0)
         .unwrap();
 
     let schedule = ctx
@@ -484,39 +484,39 @@ fn matmul_chain3_forward_backward() {
     let grad_tensors = &saved_tensors.grad_tensors;
     let saved_tensors = &saved_tensors.forward_saved;
 
-    ctx.download(&saved_tensors[0], &mut dst).unwrap();
+    ctx.download(&saved_tensors[0], &mut dst, 0).unwrap();
     let download = &dst[..(M * N) as usize];
     assert!(download.iter().all(|x| *x == X_VAL));
 
-    ctx.download(&saved_tensors[1], &mut dst).unwrap();
+    ctx.download(&saved_tensors[1], &mut dst, 0).unwrap();
     let download = &dst[..(H * N) as usize];
     assert!(download.iter().all(|x| *x == Y_VAL));
 
-    ctx.download(&saved_tensors[2], &mut dst).unwrap();
+    ctx.download(&saved_tensors[2], &mut dst, 0).unwrap();
     let download = &dst[..(H * H) as usize];
     assert!(download.iter().all(|x| *x == Z_VAL));
 
-    ctx.download(out_tensor, &mut dst).unwrap();
+    ctx.download(out_tensor, &mut dst, 0).unwrap();
     let download = &dst[..(H * H) as usize];
     assert!(download.iter().all(|x| *x == Z_VAL + E_VAL));
 
-    ctx.download(&grad_tensors[0], &mut dst).unwrap();
+    ctx.download(&grad_tensors[0], &mut dst, 0).unwrap();
     let download = &dst[..(M * K) as usize];
     assert!(download.iter().all(|x| *x == A_GRAD));
 
-    ctx.download(&grad_tensors[1], &mut dst).unwrap();
+    ctx.download(&grad_tensors[1], &mut dst, 0).unwrap();
     let download = &dst[..(K * N) as usize];
     assert!(download.iter().all(|x| *x == B_GRAD));
 
-    ctx.download(&grad_tensors[2], &mut dst).unwrap();
+    ctx.download(&grad_tensors[2], &mut dst, 0).unwrap();
     let download = &dst[..(H * M) as usize];
     assert!(download.iter().all(|x| *x == C_GRAD));
 
-    ctx.download(&grad_tensors[3], &mut dst).unwrap();
+    ctx.download(&grad_tensors[3], &mut dst, 0).unwrap();
     let download = &dst[..(N * H) as usize];
     assert!(download.iter().all(|x| *x == D_GRAD));
 
-    ctx.download(&grad_tensors[4], &mut dst).unwrap();
+    ctx.download(&grad_tensors[4], &mut dst, 0).unwrap();
     let download = &dst[..(H * H) as usize];
     assert!(download.iter().all(|x| *x == 1.0));
 }
@@ -599,7 +599,7 @@ fn matmul_sub_forward_backward() {
             .unwrap(),
     ];
 
-    ctx.upload(&saved_tensors.seed, &[1_f32; (M * N) as usize], 0, 0)
+    ctx.upload(&saved_tensors.seed, &[1_f32; (M * N) as usize], 0)
         .unwrap();
 
     let schedule = ctx
@@ -625,31 +625,31 @@ fn matmul_sub_forward_backward() {
     let grad_tensors = &saved_tensors.grad_tensors;
     let saved_tensors = &saved_tensors.forward_saved;
 
-    ctx.download(&saved_tensors[0], &mut dst).unwrap();
+    ctx.download(&saved_tensors[0], &mut dst, 0).unwrap();
     let download = &dst[..(M * N) as usize];
     assert!(download.iter().all(|x| *x == X_VAL));
 
-    ctx.download(&saved_tensors[1], &mut dst).unwrap();
+    ctx.download(&saved_tensors[1], &mut dst, 0).unwrap();
     let download = &dst[..(M * N) as usize];
     assert!(download.iter().all(|x| *x == Y_VAL));
 
-    ctx.download(out_tensor, &mut dst).unwrap();
+    ctx.download(out_tensor, &mut dst, 0).unwrap();
     let download = &dst[..(M * N) as usize];
     assert!(download.iter().all(|x| *x == Z_VAL));
 
-    ctx.download(&grad_tensors[0], &mut dst).unwrap();
+    ctx.download(&grad_tensors[0], &mut dst, 0).unwrap();
     let download = &dst[..(M * K) as usize];
     assert!(download.iter().all(|x| *x == A_GRAD));
 
-    ctx.download(&grad_tensors[1], &mut dst).unwrap();
+    ctx.download(&grad_tensors[1], &mut dst, 0).unwrap();
     let download = &dst[..(K * N) as usize];
     assert!(download.iter().all(|x| *x == B_GRAD));
 
-    ctx.download(&grad_tensors[2], &mut dst).unwrap();
+    ctx.download(&grad_tensors[2], &mut dst, 0).unwrap();
     let download = &dst[..(M * K) as usize];
     assert!(download.iter().all(|x| *x == C_GRAD));
 
-    ctx.download(&grad_tensors[3], &mut dst).unwrap();
+    ctx.download(&grad_tensors[3], &mut dst, 0).unwrap();
     let download = &dst[..(K * N) as usize];
     assert!(download.iter().all(|x| *x == D_GRAD));
 }

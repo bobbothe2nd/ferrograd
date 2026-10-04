@@ -1,5 +1,5 @@
 use crate::dispatch::backend::{
-    Axis, MetaId, ParamId, SharedId, ValueId, ValueState, kernel::RawKernel,
+    Axis, DType, MetaId, ParamId, SharedId, ValueId, ValueState, kernel::RawKernel,
 };
 
 #[non_exhaustive]
@@ -255,23 +255,13 @@ pub enum Op {
         b: ValueId,
     },
 
-    CastF64 {
+    Cast {
         id: ValueId,
+        dtype: DType,
     },
-    CastF32 {
+    BitCast {
         id: ValueId,
-    },
-    CastF16 {
-        id: ValueId,
-    },
-    CastBF16 {
-        id: ValueId,
-    },
-    CastU32 {
-        id: ValueId,
-    },
-    CastI32 {
-        id: ValueId,
+        dtype: DType,
     },
 
     Select {
@@ -304,24 +294,30 @@ pub enum Op {
     Return,
 
     /// Tensor/matrix core requires `TargetCompilationOptions::LIN_ACC`
-    Mma {
+    MmaSync {
         a: ValueId,
         b: ValueId,
         acc: ValueId,
     },
 
     /// Tensor/matrix core requires `TargetCompilationOptions::LIN_ACC`
-    MmaLoadA {
-        mem: SharedId,
-        row: ValueId,
-        col: ValueId,
+    LoadMatrixSync {
+        out: ValueId,
+        index: ValueId,
+        stride: ValueId,
     },
 
     /// Tensor/matrix core requires `TargetCompilationOptions::LIN_ACC`
-    MmaLoadB {
-        mem: SharedId,
-        row: ValueId,
-        col: ValueId,
+    StoreMatrixSync {
+        index: ValueId,
+        frag: ValueId,
+        stride: ValueId,
+    },
+
+    /// Tensor/matrix core requires `TargetCompilationOptions::LIN_ACC`
+    FillFragment {
+        frag: ValueId,
+        val: ValueId,
     },
 }
 
@@ -358,12 +354,8 @@ impl Op {
             | Self::Tanh { x }
             | Self::Not { cond: x }
             | Self::CopyVar { id: x }
-            | Self::CastF64 { id: x }
-            | Self::CastF32 { id: x }
-            | Self::CastF16 { id: x }
-            | Self::CastBF16 { id: x }
-            | Self::CastU32 { id: x }
-            | Self::CastI32 { id: x } => x == &value_id,
+            | Self::Cast { id: x, .. }
+            | Self::BitCast { id: x, .. } => x == &value_id,
             Self::Add { a, b }
             | Self::Div { a, b }
             | Self::Eq { a, b }
@@ -388,9 +380,7 @@ impl Op {
             | Self::ShrAssign { val, .. }
             | Self::SubAssign { val, .. }
             | Self::OverwriteVar { val, .. } => val == &value_id,
-            Self::ForLoopBegin { index, end, step } => {
-                index == &value_id || end == &value_id || step == &value_id
-            }
+            Self::ForLoopBegin { index, end, step } => index == &value_id || end == &value_id || step == &value_id,
             Self::IfBegin { cond } => cond == &value_id,
             Self::ParamAccum { index, value, .. }
             | Self::ParamDiv { index, value, .. }
@@ -408,10 +398,10 @@ impl Op {
             | Self::SharedSub { index, value, .. } => index == &value_id || value == &value_id,
             Self::ParamLoad { index, .. } | Self::SharedLoad { index, .. } => index == &value_id,
             Self::Select { cond, a, b } => cond == &value_id || a == &value_id || b == &value_id,
-            Self::Mma { a, b, acc } => a == &value_id || b == &value_id || acc == &value_id,
-            Self::MmaLoadA { row, col, .. } | Self::MmaLoadB { row, col, .. } => {
-                row == &value_id || col == &value_id
-            }
+            Self::MmaSync { a, b, acc } => a == &value_id || b == &value_id || acc == &value_id,
+            Self::LoadMatrixSync { out, index, stride } => out == &value_id || index == &value_id || stride == &value_id,
+            Self::StoreMatrixSync { index, frag, stride } => index == &value_id || frag == &value_id || stride == &value_id,
+            Self::FillFragment { frag, val } => frag == &value_id || val == &value_id,
         }
     }
 
@@ -433,12 +423,8 @@ impl Op {
             | Self::Sqrt { x }
             | Self::Tanh { x }
             | Self::Not { cond: x }
-            | Self::CastF64 { id: x }
-            | Self::CastF32 { id: x }
-            | Self::CastF16 { id: x }
-            | Self::CastBF16 { id: x }
-            | Self::CastU32 { id: x }
-            | Self::CastI32 { id: x } => replace_if_eq(x, old_id, new_id),
+            | Self::Cast { id: x, .. }
+            | Self::BitCast { id: x, .. } => replace_if_eq(x, old_id, new_id),
             Self::Add { a, b }
             | Self::Div { a, b }
             | Self::Eq { a, b }
@@ -504,6 +490,25 @@ impl Op {
                 replace_if_eq(a, old_id, new_id);
                 replace_if_eq(b, old_id, new_id);
             }
+            Self::MmaSync { a, b, acc } => {
+                replace_if_eq(a, old_id, new_id);
+                replace_if_eq(b, old_id, new_id);
+                replace_if_eq(acc, old_id, new_id);
+            }
+            Self::LoadMatrixSync { out, index, stride } => {
+                replace_if_eq(out, old_id, new_id);
+                replace_if_eq(index, old_id, new_id);
+                replace_if_eq(stride, old_id, new_id);
+            }
+            Self::StoreMatrixSync { index, frag, stride } => {
+                replace_if_eq(index, old_id, new_id);
+                replace_if_eq(frag, old_id, new_id);
+                replace_if_eq(stride, old_id, new_id);
+            }
+            Self::FillFragment { frag, val } => {
+                replace_if_eq(frag, old_id, new_id);
+                replace_if_eq(val, old_id, new_id);
+            }
             Self::Barrier
             | Self::BlockId { .. }
             | Self::Break
@@ -524,15 +529,6 @@ impl Op {
             | Self::Return
             | Self::Nop
             | Self::StartScope => {}
-            Self::Mma { a, b, acc } => {
-                replace_if_eq(a, old_id, new_id);
-                replace_if_eq(b, old_id, new_id);
-                replace_if_eq(acc, old_id, new_id);
-            }
-            Self::MmaLoadA { row, col, .. } | Self::MmaLoadB { row, col, .. } => {
-                replace_if_eq(row, old_id, new_id);
-                replace_if_eq(col, old_id, new_id);
-            }
         }
     }
 
@@ -553,12 +549,8 @@ impl Op {
             | Self::Sqrt { x }
             | Self::Tanh { x }
             | Self::Not { cond: x }
-            | Self::CastF64 { id: x }
-            | Self::CastF32 { id: x }
-            | Self::CastF16 { id: x }
-            | Self::CastBF16 { id: x }
-            | Self::CastU32 { id: x }
-            | Self::CastI32 { id: x } => not_mut(*x, kernel),
+            | Self::Cast { id: x, .. }
+            | Self::BitCast { id: x, .. } => not_mut(*x, kernel),
             Self::Add { a, b }
             | Self::Div { a, b }
             | Self::Eq { a, b }
@@ -575,9 +567,7 @@ impl Op {
             | Self::Sub { a, b }
             | Self::Shl { a, b }
             | Self::Shr { a, b } => not_mut(*a, kernel) && not_mut(*b, kernel),
-            Self::Fma { a, b, c } => {
-                not_mut(*a, kernel) && not_mut(*b, kernel) && not_mut(*c, kernel)
-            }
+            Self::Fma { a, b, c } => not_mut(*a, kernel) && not_mut(*b, kernel) && not_mut(*c, kernel),
             Self::AddAssign { val, id }
             | Self::DivAssign { val, id }
             | Self::MulAssign { val, id }
@@ -585,9 +575,7 @@ impl Op {
             | Self::ShrAssign { val, id }
             | Self::SubAssign { val, id }
             | Self::OverwriteVar { val, id } => not_mut(*val, kernel) && not_mut(*id, kernel),
-            Self::ForLoopBegin { index, end, step } => {
-                not_mut(*index, kernel) && not_mut(*end, kernel) && not_mut(*step, kernel)
-            }
+            Self::ForLoopBegin { index, end, step } => not_mut(*index, kernel) && not_mut(*end, kernel) && not_mut(*step, kernel),
             Self::IfBegin { cond } => not_mut(*cond, kernel),
             Self::ParamAccum { index, value, .. }
             | Self::ParamDiv { index, value, .. }
@@ -602,21 +590,13 @@ impl Op {
             | Self::SharedShl { index, value, .. }
             | Self::SharedShr { index, value, .. }
             | Self::SharedStore { index, value, .. }
-            | Self::SharedSub { index, value, .. } => {
-                not_mut(*index, kernel) && not_mut(*value, kernel)
-            }
-            Self::ParamLoad { index, .. } | Self::SharedLoad { index, .. } => {
-                not_mut(*index, kernel)
-            }
-            Self::Select { cond, a, b } => {
-                not_mut(*cond, kernel) && not_mut(*a, kernel) && not_mut(*b, kernel)
-            }
-            Self::Mma { a, b, acc } => {
-                not_mut(*a, kernel) && not_mut(*b, kernel) && not_mut(*acc, kernel)
-            }
-            Self::MmaLoadA { row, col, .. } | Self::MmaLoadB { row, col, .. } => {
-                not_mut(*row, kernel) && not_mut(*col, kernel)
-            }
+            | Self::SharedSub { index, value, .. } => not_mut(*index, kernel) && not_mut(*value, kernel),
+            Self::ParamLoad { index, .. } | Self::SharedLoad { index, .. } => not_mut(*index, kernel),
+            Self::Select { cond, a, b } => not_mut(*cond, kernel) && not_mut(*a, kernel) && not_mut(*b, kernel),
+            Self::MmaSync { a, b, acc } => not_mut(*a, kernel) && not_mut(*b, kernel) && not_mut(*acc, kernel),
+            Self::LoadMatrixSync { out, index, stride } => not_mut(*out, kernel) && not_mut(*index, kernel) && not_mut(*stride, kernel),
+            Self::StoreMatrixSync { frag, index, stride } => not_mut(*frag, kernel) && not_mut(*index, kernel) && not_mut(*stride, kernel),
+            Self::FillFragment { frag, val } => not_mut(*frag, kernel) && not_mut(*val, kernel),
             Self::Barrier
             | Self::BlockId { .. }
             | Self::Break
@@ -652,7 +632,11 @@ impl Op {
             | Self::ShrAssign { id, .. }
             | Self::SubAssign { id, .. }
             | Self::OverwriteVar { id, .. }
-            | Self::ForLoopBegin { index: id, .. } => id == &value_id,
+            | Self::ForLoopBegin { index: id, .. }
+            | Self::FillFragment { frag: id, .. }
+            | Self::LoadMatrixSync { out: id, .. }
+            | Self::SharedStore { mem: id, .. }
+            | Self::MmaSync { acc: id, .. } => id == &value_id,
             _ => false,
         }
     }
@@ -669,7 +653,11 @@ impl Op {
             | Self::ShrAssign { id, .. }
             | Self::SubAssign { id, .. }
             | Self::OverwriteVar { id, .. }
-            | Self::ForLoopBegin { index: id, .. } => Some(*id),
+            | Self::ForLoopBegin { index: id, .. }
+            | Self::FillFragment { frag: id, .. }
+            | Self::LoadMatrixSync { out: id, .. }
+            | Self::SharedStore { mem: id, .. }
+            | Self::MmaSync { acc: id, .. } => Some(*id),
             _ => None,
         }
     }
@@ -685,29 +673,39 @@ impl Op {
             | Self::ShrAssign { id, .. }
             | Self::SubAssign { id, .. }
             | Self::OverwriteVar { id, .. }
-            | Self::ForLoopBegin { index: id, .. } => id == &value_id,
+            | Self::ForLoopBegin { index: id, .. }
+            | Self::FillFragment { frag: id, .. }
+            | Self::LoadMatrixSync { out: id, .. }
+            | Self::SharedStore { mem: id, .. }
+            | Self::MmaSync { acc: id, .. } => id == &value_id,
             _ => false,
         }
     }
 
     #[inline]
     #[must_use]
-    pub const fn is_zero(&self) -> bool {
+    pub fn is_zero(&self) -> bool {
         match self {
-            Self::ConstF32 { value } => value.abs() == 0.0,
             Self::ConstI32 { value } => *value == 0,
             Self::ConstU32 { value } => *value == 0,
+            Self::ConstF32 { value } => value.abs() < 1e-9,
+            Self::ConstBf16 { value } => value.to_f32().abs() < 1e-9,
+            Self::ConstF16 { value } => value.to_f32().abs() < 1e-9,
+            Self::ConstF64 { value } => value.abs() < 1e-9,
             _ => false,
         }
     }
 
     #[inline]
     #[must_use]
-    pub const fn is_one(&self) -> bool {
+    pub fn is_one(&self) -> bool {
         match self {
-            Self::ConstF32 { value } => (*value - 1.0).abs() < 1e-9,
             Self::ConstI32 { value } => *value == 1,
             Self::ConstU32 { value } => *value == 1,
+            Self::ConstF32 { value } => (value - 1.0).abs() < 1e-9,
+            Self::ConstBf16 { value } => (value.to_f32() - 1.0).abs() < 1e-9,
+            Self::ConstF16 { value } => (value.to_f32() - 1.0).abs() < 1e-9,
+            Self::ConstF64 { value } => (value - 1.0).abs() < 1e-9,
             _ => false,
         }
     }

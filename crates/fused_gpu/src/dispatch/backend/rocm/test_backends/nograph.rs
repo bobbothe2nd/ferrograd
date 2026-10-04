@@ -1,6 +1,5 @@
 #![allow(unsafe_code)]
 
-use rocm_rt::hip::{graph::StreamCaptureMode, module::Module};
 pub use rocm_rt::{
     hip::{
         HipError,
@@ -19,7 +18,7 @@ pub use rocm_rt::{
 };
 
 use core::ptr::from_ref;
-use std::{marker::PhantomData, rc::Rc};
+use std::marker::PhantomData;
 
 use briny::raw::cast::slice_to_bytes;
 
@@ -81,10 +80,6 @@ impl GpuBackend for GpuContext {
     type Schedule<'a> = Schedule<'a>;
 
     fn alloc(&self, len: u32) -> Result<Self::Buffer, Error> {
-        map_err!(self.device.alloc(len), "failed to allocate GPU buffer")
-    }
-
-    fn alloc_zeroed(&self, len: u32) -> Result<Self::Buffer, Error> {
         map_err!(self.device.alloc_zeroed(len), "failed to allocate GPU buffer")
     }
 
@@ -140,7 +135,7 @@ impl GpuBackend for GpuContext {
 
         let opts = CompileOptions {
             opt_level: Some(3),
-            fast_math: Some(false),
+            fast_math: Some(true),
             name: Some(c"kernel"),
             options: &[],
             defines: &[],
@@ -174,7 +169,7 @@ impl GpuBackend for GpuContext {
         TargetCompilationOptions { flags }
     }
 
-    fn download(&self, buffer: &Self::Buffer, out: &mut [u8], src_off: u32) -> Result<(), Error> {
+    fn download(&self, buffer: &Self::Buffer, out: &mut [u8]) -> Result<(), Error> {
         let len = out.len();
 
         let (host_buf, just_mapped) = match DevMapped::new(out) {
@@ -186,7 +181,7 @@ impl GpuBackend for GpuContext {
         };
 
         map_err!(
-            buffer.copy_to_host(&host_buf, src_off as usize, 0, len),
+            buffer.copy_to_host(&host_buf, 0, 0, len),
             "failed to copy from GPU to host"
         )?;
 
@@ -242,23 +237,22 @@ impl GpuBackend for GpuContext {
         &self,
         schedule: &Self::Schedule<'_>,
     ) -> Result<(), Error> {
-        unsafe extern "C" fn drop_rc(data: *mut u8) {
-            let _ = unsafe { Rc::from_raw(data.cast::<ScheduleInner<'_>>()) };
+        for (kernel, grid, kernel_args) in &schedule.kernels {
+            let mut args = kernel_args.clone();
+
+            unsafe {
+                self.stream.launch(
+                    &kernel.func,
+                    &mut args,
+                    LaunchConfig {
+                        grid: *grid,
+                        block: kernel.block,
+                    },
+                ).unwrap();
+            }
         }
 
-        let schedule = Rc::clone(&schedule.inner);
-
-        unsafe {
-            map_err!(
-                self.stream.launch_graph(&schedule.graph),
-                "failed to launch graph"
-            )?;
-            map_err!(
-                self.stream
-                    .launch_host(Callback::new(drop_rc), Rc::into_raw(schedule) as *mut u8),
-                "failed to launch host callback"
-            )
-        }
+        Ok(())
     }
 
     fn schedule_parallel<'a>(
@@ -268,10 +262,7 @@ impl GpuBackend for GpuContext {
         meta: &[u32],
         meta_buf: &Self::MetaBuf,
     ) -> Result<Self::Schedule<'a>, Error> {
-        map_err!(
-            self.stream.start_capture(StreamCaptureMode::Global),
-            "failed to start capture"
-        )?;
+        let mut scheduled_kernels = Vec::new();
 
         let iter_space = build_dims(kernel.iteration_space(), meta);
         let grid = calc_grid(&iter_space, *kernel.block());
@@ -285,34 +276,12 @@ impl GpuBackend for GpuContext {
                 kernel_bindings.push(from_ref(*binding) as *mut u8);
             }
 
-            unsafe {
-                map_err!(
-                    self.stream.launch(&kernel.func, &mut kernel_bindings, LaunchConfig {
-                        grid,
-                        block: kernel.block,
-                    }),
-                    "failed to launch kernel"
-                )?;
-            }
+            scheduled_kernels.push((kernel.clone(), grid, kernel_bindings.into_boxed_slice()));
         }
 
-        let graph = map_err!(
-            self.stream.end_capture(),
-            "failed to end capture"
-        )?;
-        let graph = map_err!(
-            graph.init(GraphInstantiateFlags::empty()),
-            "faield to instantiate graph"
-        )?;
-
-        let kernel = Box::new([kernel.func.module_handle()]);
-
         Ok(Schedule {
-            inner: Rc::new(ScheduleInner {
-                graph,
-                _kernels: kernel,
-                _marker: PhantomData,
-            }),
+            kernels: scheduled_kernels.into_boxed_slice(),
+            _marker: PhantomData,
         })
     }
 
@@ -323,10 +292,7 @@ impl GpuBackend for GpuContext {
         meta: &[u32],
         meta_buf: &'a Self::MetaBuf,
     ) -> Result<Self::Schedule<'a>, Error> {
-        map_err!(
-            self.stream.start_capture(StreamCaptureMode::Global),
-            "failed to start capture"
-        )?;
+        let mut scheduled_kernels = Vec::new();
 
         eval_dependency_order(&kernels, |kernel, _, params| {
             let iter_space = build_dims(kernel.iteration_space(), meta);
@@ -340,43 +306,14 @@ impl GpuBackend for GpuContext {
                 kernel_args.push(from_ref(*binding) as *mut u8);
             }
 
-            unsafe {
-                map_err!(
-                    self.stream.launch(&kernel.func, &mut kernel_args, LaunchConfig {
-                        grid,
-                        block: kernel.block,
-                    }),
-                    "failed to launch kernel"
-                )?;
-            }
+            scheduled_kernels.push((kernel.clone(), grid, kernel_args.into_boxed_slice()));
 
             Ok(())
         })?;
 
-        let graph = map_err!(
-            self.stream.end_capture(),
-            "failed to end capture"
-        )?;
-        let graph = map_err!(
-            graph.init(GraphInstantiateFlags::empty()),
-            "faield to instantiate graph"
-        )?;
-
-        let kernels = kernels
-            .iter()
-            .filter_map(|kernel| if let Redirect::Unmasked((kernel, ..)) = &kernel.val {
-                Some(kernel.func.module_handle())
-            } else {
-                None
-            })
-            .collect();
-
         Ok(Schedule {
-            inner: Rc::new(ScheduleInner {
-                graph,
-                _kernels: kernels,
-                _marker: PhantomData,
-            }),
+            kernels: scheduled_kernels.into_boxed_slice(),
+            _marker: PhantomData,
         })
     }
 
@@ -395,18 +332,15 @@ impl GpuBackend for GpuContext {
         &self,
         buffer: &Self::Buffer,
         data: &[u8],
+        src_off: u32,
         dst_off: u32,
     ) -> Result<(), Error> {
         let host_buf = unsafe { DevMapped::from_slice(data) };
 
-        let just_mapped = match unsafe { host_buf.map() } {
-            Ok(_) => true,
-            Err(HipError::HostMemoryAlreadyRegistered) => false,
-            e => return map_err!(e, "failed to register host memory"),
-        };
+        let just_mapped = unsafe { host_buf.map().is_ok() };
 
         map_err!(
-            host_buf.copy_to_dev(buffer, 0, dst_off as usize, data.len()),
+            host_buf.copy_to_dev(buffer, src_off as usize, dst_off as usize, data.len()),
             "failed to copy host to GPU device"
         )?;
 
@@ -426,12 +360,7 @@ impl GpuBackend for GpuContext {
 }
 
 pub struct Schedule<'a> {
-    inner: Rc<ScheduleInner<'a>>,
-}
-
-pub struct ScheduleInner<'a> {
-    graph: ExecGraph,
-    _kernels: Box<[Module]>,
+    kernels: Box<[(Kernel, [u32; 3], Box<[*mut u8]>)]>,
     _marker: PhantomData<&'a [Buffer]>,
 }
 

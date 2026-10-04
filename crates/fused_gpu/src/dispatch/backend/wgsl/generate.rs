@@ -463,32 +463,12 @@ fn process_op(
             let _ = write!(out, "!({})", render_val(*cond, kernel)?);
         }
 
-        Op::CastF64 { id } => {
-            let _ = write!(out, "f64({})", render_val(*id, kernel)?);
+        Op::Cast { id, dtype } => {
+            let _ = write!(out, "{}({})", dtype.fmt_wgsl()?, render_val(*id, kernel)?);
         }
 
-        Op::CastF32 { id } => {
-            let _ = write!(out, "f32({})", render_val(*id, kernel)?);
-        }
-
-        Op::CastF16 { id } => {
-            let _ = write!(out, "f16({})", render_val(*id, kernel)?);
-        }
-
-        Op::CastU32 { id } => {
-            let _ = write!(out, "u32({})", render_val(*id, kernel)?);
-        }
-
-        Op::CastI32 { id } => {
-            let _ = write!(out, "i32({})", render_val(*id, kernel)?);
-        }
-
-        Op::CastBF16 { .. } => {
-            return Err(Error {
-                msg: "bf16 not supported",
-                kind: ErrorKind::InvalidDType,
-                ctx: (),
-            });
+        Op::BitCast { id, dtype } => {
+            let _ = write!(out, "bitcast<{}>({})", dtype.fmt_wgsl()?, render_val(*id, kernel)?);
         }
 
         Op::ParamStore {

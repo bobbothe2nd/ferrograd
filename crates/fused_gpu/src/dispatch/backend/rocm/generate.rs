@@ -21,9 +21,13 @@ pub fn generate_hip(
 ) -> Result<String, Error> {
     let Ok(mut out) = "
 #include <cstdint>
+#include <bit>
 #include <hip/hip_bfloat16.h>
 #include <hip/hip_fp16.h>
 #include <hip/hip_runtime.h>
+#include <hip/hip_wmma.h>
+
+using namespace hip::wmma;
 "
     .parse::<String>();
 
@@ -376,30 +380,15 @@ fn process_op(
             let _ = write!(out, "!({})", render_val(*cond, kernel)?);
         }
 
-        Op::CastF64 { id } => {
-            let _ = write!(out, "static_cast<double>({})", render_val(*id, kernel)?);
+        Op::Cast { id, dtype } => {
+            let _ = write!(out, "static_cast<{}>({})", dtype.fmt_c(), render_val(*id, kernel)?);
         }
 
-        Op::CastF32 { id } => {
-            let _ = write!(out, "static_cast<float>({})", render_val(*id, kernel)?);
-        }
-
-        Op::CastF16 { id } => {
-            let _ = write!(out, "static_cast<__half>({})", render_val(*id, kernel)?);
-        }
-
-        Op::CastU32 { id } => {
-            let _ = write!(out, "static_cast<uint32_t>({})", render_val(*id, kernel)?);
-        }
-
-        Op::CastI32 { id } => {
-            let _ = write!(out, "static_cast<int32_t>({})", render_val(*id, kernel)?);
-        }
-
-        Op::CastBF16 { id } => {
+        Op::BitCast { id, dtype } => {
             let _ = write!(
                 out,
-                "static_cast<hip_bfloat16>({})",
+                "__builtin_bit_cast({}, {})",
+                dtype.fmt_c(),
                 render_val(*id, kernel)?
             );
         }

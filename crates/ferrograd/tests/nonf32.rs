@@ -61,7 +61,7 @@ fn mul_add_f16() {
             .unwrap(),
     ];
 
-    ctx.upload(&saved_tensors.seed, &[f16::from_f32(1.0); 1024], 0, 0)
+    ctx.upload(&saved_tensors.seed, &[f16::from_f32(1.0); 1024], 0)
         .unwrap();
 
     let schedule = ctx
@@ -85,15 +85,15 @@ fn mul_add_f16() {
     let out_tensor = &saved_tensors.forward_out;
     let grad_tensors = &saved_tensors.grad_tensors;
 
-    ctx.download(out_tensor, &mut dst).unwrap();
+    ctx.download(out_tensor, &mut dst, 0).unwrap();
     assert!(dst.iter().all(|x| *x == f16::from_f32(7.0)));
 
-    ctx.download(&grad_tensors[0], &mut dst).unwrap();
+    ctx.download(&grad_tensors[0], &mut dst, 0).unwrap();
     assert!(dst.iter().all(|x| *x == f16::from_f32(2.0)));
 
-    ctx.download(&grad_tensors[1], &mut dst).unwrap();
+    ctx.download(&grad_tensors[1], &mut dst, 0).unwrap();
     assert!(dst.iter().all(|x| *x == f16::from_f32(3.0)));
 
-    ctx.download(&grad_tensors[2], &mut dst).unwrap();
+    ctx.download(&grad_tensors[2], &mut dst, 0).unwrap();
     assert!(dst.iter().all(|x| *x == f16::from_f32(1.0)));
 }

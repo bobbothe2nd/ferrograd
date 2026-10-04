@@ -24,6 +24,7 @@ pub mod rocm;
 
 mod ops;
 
+use half::{bf16, f16};
 pub use ops::Op;
 
 #[cfg(feature = "wgsl")]
@@ -89,6 +90,14 @@ impl GpuBackend for NopGpuContext {
         })
     }
 
+    fn alloc_zeroed(&self, _len: u32) -> Result<Self::Buffer, Error> {
+        Err(Error {
+            msg: "using nop backend",
+            kind: ErrorKind::UnsupportedFeature,
+            ctx: (),
+        })
+    }
+
     fn alloc_init(&self, _data: &[u8]) -> Result<Self::Buffer, Error> {
         Err(Error {
             msg: "using nop backend",
@@ -118,7 +127,12 @@ impl GpuBackend for NopGpuContext {
         })
     }
 
-    fn download(&self, _buffer: &Self::Buffer, _out: &mut [u8]) -> Result<(), Error> {
+    fn download(
+        &self,
+        _buffer: &Self::Buffer,
+        _out: &mut [u8],
+        _src_off: u32,
+    ) -> Result<(), Error> {
         Err(Error {
             msg: "using nop backend",
             kind: ErrorKind::UnsupportedFeature,
@@ -196,7 +210,6 @@ impl GpuBackend for NopGpuContext {
         &self,
         _buffer: &Self::Buffer,
         _data: &[u8],
-        _src_off: u32,
         _dst_off: u32,
     ) -> Result<(), Error> {
         Err(Error {
@@ -235,9 +248,9 @@ pub type ValueId = usize;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DType {
     Simple(SimpleDType),
-    MmaA { dtype: SimpleDType, m: u32, n: u32 },
-    MmaB { dtype: SimpleDType, m: u32, n: u32 },
-    MmaAccum { dtype: SimpleDType, m: u32, n: u32 },
+    MmaA { dtype: SimpleDType, m: u32, n: u32, k: u32 },
+    MmaB { dtype: SimpleDType, m: u32, n: u32, k: u32 },
+    MmaAccum { dtype: SimpleDType, m: u32, n: u32, k: u32 },
 }
 
 impl DType {
@@ -246,9 +259,9 @@ impl DType {
     pub const fn bits(self) -> usize {
         match self {
             Self::Simple(dtype) => dtype.bits(),
-            Self::MmaA { dtype, m, n }
-            | Self::MmaB { dtype, m, n }
-            | Self::MmaAccum { dtype, m, n } => dtype.bits() * (m * n) as usize,
+            Self::MmaA { dtype, m, n, k }
+            | Self::MmaB { dtype, m, n, k }
+            | Self::MmaAccum { dtype, m, n, k } => dtype.bits() * (m * n * k) as usize,
         }
     }
 
@@ -257,9 +270,9 @@ impl DType {
     pub const fn size(self) -> usize {
         match self {
             Self::Simple(dtype) => dtype.size(),
-            Self::MmaA { dtype, m, n }
-            | Self::MmaB { dtype, m, n }
-            | Self::MmaAccum { dtype, m, n } => dtype.size() * (m * n) as usize,
+            Self::MmaA { dtype, m, n, k }
+            | Self::MmaB { dtype, m, n, k }
+            | Self::MmaAccum { dtype, m, n, k } => dtype.size() * (m * n * k) as usize,
         }
     }
 
@@ -354,10 +367,10 @@ impl SimpleDType {
     pub fn constant_float(self, value: f32) -> Result<Op, Error> {
         match self {
             Self::BF16 => Ok(Op::ConstBf16 {
-                value: half::bf16::from_f32(value),
+                value: bf16::from_f32(value),
             }),
             Self::F16 => Ok(Op::ConstF16 {
-                value: half::f16::from_f32(value),
+                value: f16::from_f32(value),
             }),
             Self::F32 => Ok(Op::ConstF32 { value }),
             _ => Err(Error {
@@ -372,10 +385,10 @@ impl SimpleDType {
     pub const fn constant_min(self) -> Result<Op, Error> {
         match self {
             Self::BF16 => Ok(Op::ConstBf16 {
-                value: half::bf16::MIN,
+                value: bf16::MIN,
             }),
             Self::F16 => Ok(Op::ConstF16 {
-                value: half::f16::MIN,
+                value: f16::MIN,
             }),
             Self::F32 => Ok(Op::ConstF32 { value: f32::MIN }),
             Self::F64 => Ok(Op::ConstF64 { value: f64::MIN }),
@@ -393,10 +406,10 @@ impl SimpleDType {
     pub const fn constant_max(self) -> Result<Op, Error> {
         match self {
             Self::BF16 => Ok(Op::ConstBf16 {
-                value: half::bf16::MAX,
+                value: bf16::MAX,
             }),
             Self::F16 => Ok(Op::ConstF16 {
-                value: half::f16::MAX,
+                value: f16::MAX,
             }),
             Self::F32 => Ok(Op::ConstF32 { value: f32::MAX }),
             Self::F64 => Ok(Op::ConstF64 { value: f64::MAX }),
@@ -652,8 +665,8 @@ pub enum GraphOp<'a> {
     ConstU32(u32),
     ConstI32(i32),
     ConstF32(f32),
-    ConstF16(half::f16),
-    ConstBf16(half::bf16),
+    ConstF16(f16),
+    ConstBf16(bf16),
 
     Custom {
         lower: fn(
@@ -1275,7 +1288,7 @@ impl<'a> Graph<'a> {
         )
     }
 
-    pub fn constant_f16(&mut self, data: half::f16) -> NodeId {
+    pub fn constant_f16(&mut self, data: f16) -> NodeId {
         self.add_node(
             GraphOp::ConstF16(data),
             Vec::new(),
@@ -1284,7 +1297,7 @@ impl<'a> Graph<'a> {
         )
     }
 
-    pub fn constant_bf16(&mut self, data: half::bf16) -> NodeId {
+    pub fn constant_bf16(&mut self, data: bf16) -> NodeId {
         self.add_node(
             GraphOp::ConstBf16(data),
             Vec::new(),

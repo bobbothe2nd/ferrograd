@@ -6,22 +6,16 @@ use ferrograd::{
     io::BpatHeader,
     nn::{MEAN_SQUARED_ERROR, Optim},
 };
-use gpu_telemetry::monitor::{GpuMonitor, telemetry::Telemetry};
 use rand_core::{Rng, SeedableRng};
 use rand_xorshift::XorShiftRng;
-use std::time::{Duration, Instant};
+use std::{io::Write, time::Instant};
 
 const PATH: &str = "data/v2f32_test.bpat";
 
 const ITERS: usize = 256;
-const EPOCHS_TO_SAVE: usize = 1;
+const EPOCHS_TO_SAVE: usize = 32;
 
 const LR: f32 = 1e-10;
-
-#[cfg(feature = "rocm")]
-const INTERVAL: Duration = Duration::from_millis(5);
-#[cfg(not(feature = "rocm"))]
-const INTERVAL: Duration = Duration::from_millis(100);
 
 fn main() {
     const M: u32 = 768;
@@ -29,11 +23,11 @@ fn main() {
     const K: u32 = 512;
     const H: u32 = 256;
 
-    const A_VAL: f32 = 0.03;
-    const B_VAL: f32 = 0.02;
+    const A_VAL: f32 = 0.002;
+    const B_VAL: f32 = 0.003;
     const C_VAL: f32 = 0.01;
-    const D_VAL: f32 = 0.05;
-    const E_VAL: f32 = 1.0;
+    const D_VAL: f32 = 0.007;
+    const E_VAL: f32 = 0.008;
 
     stderrlog::new().verbosity(log::Level::Debug).init().unwrap();
 
@@ -59,7 +53,14 @@ fn main() {
         let x = graph.matmul(a, b);
         let y = graph.matmul(c, x);
         let z = graph.matmul(y, d);
-        graph.add(z, e);
+
+        let z_res = graph.add(z, e);
+
+        let p = graph.matmul(z_res, e);
+
+        let out = graph.add(p, z_res);
+
+        graph.matmul(out, e);
     }
 
     let saved = graph.compute_saved_nodes();
@@ -108,7 +109,7 @@ fn main() {
 
     let tensor_elapsed = tensor_start.elapsed();
 
-    println!("TENSOR INIT TIME: {tensor_elapsed:?} elapsed\n");
+    println!("TENSOR INIT TIME: {tensor_elapsed:?} elapsed/n");
 
     let mut schedule = ctx
         .schedule(
@@ -125,59 +126,52 @@ fn main() {
 
     let mut rng = XorShiftRng::seed_from_u64(0);
 
+    let target = {
+        let val = 2.0 * (rng.next_u32() as f32 / u32::MAX as f32) - 1.0;
+        ctx.init_tensor_f32(&[H, H], &[val; (H * H) as usize]).unwrap()
+    };
+
     loop {
-        println!("EPOCH {epoch}:");
-
-        let target = {
-            let target = 2.0 * (rng.next_u32() as f32 / u32::MAX as f32) - 1.0;
-
-            let arr = [target; (H * H) as usize];
-
-            ctx.init_tensor_f32(&[H, H], &arr)
-        }
-        .unwrap();
-
-        let monitor: GpuMonitor<Telemetry> = GpuMonitor::start(INTERVAL).unwrap();
-
-        for _ in 0..ITERS {
-            ctx.dispatch_forward(&schedule).unwrap();
-            ctx.dispatch_loss(&mut schedule, &target).unwrap();
-            ctx.dispatch_backward(&schedule).unwrap();
+        {
+            let val = 2.0 * (rng.next_u32() as f32 / u32::MAX as f32) - 1.0;
+            ctx.upload(&target, &[val; H as usize], H * (epoch as u32 % H)).unwrap()
         }
 
-        // ctx.dispatch_optim(&mut schedule).unwrap();
+        {
+            let launch_start = Instant::now();
 
-        let telemetry = monitor.stop().unwrap();
-
-        let mut max_budget = 0;
-        let mut accum_usage = 0;
-
-        for sample in &telemetry.samples {
-            for heap in &sample.heaps {
-                if let Some(usage) = heap.usage {
-                    accum_usage += usage;
+            for _ in 0..4 {
+                for _ in 0..(ITERS / 4) {
+                    ctx.dispatch_forward(&schedule).unwrap();
+                    ctx.dispatch_loss(&mut schedule, &target).unwrap();
+                    ctx.dispatch_backward(&schedule).unwrap();
                 }
 
-                if let Some(budget) = heap.budget.or(heap.size)
-                    && budget > max_budget
-                {
-                    max_budget = budget;
-                }
+                ctx.dispatch_optim(&mut schedule).unwrap();
             }
+
+            let launch_elapsed = launch_start.elapsed();
+
+            println!("EPOCH {epoch} LAUNCH TIME: {launch_elapsed:?} elapsed");
         }
-
-        let avg_usage = accum_usage
-            .checked_div(telemetry.samples.len() as u64)
-            .unwrap_or(0);
-
-        println!("\n  AVERAGE MEMORY USAGE: {}", avg_usage);
-        println!(" MAXIMUM MEMORY BUDGET: {}\n", max_budget);
 
         if epoch % EPOCHS_TO_SAVE == EPOCHS_TO_SAVE - 1 {
+            print!(" saving...");
+            std::io::stdout().flush().unwrap();
+            ctx.save_tensors(PATH, &in_tensors, BpatHeader::BpatV2f32).unwrap();
+
+            print!("\r calculating loss...");
+            std::io::stdout().flush().unwrap();
+            let mut loss_t = Box::<[f32]>::new_uninit_slice((H * H) as usize);
+            ctx.download(&saved_tensors.loss_t, &mut loss_t, 0).unwrap();
+            let loss_t = unsafe { loss_t.assume_init() };
+            let loss = loss_t.iter().sum::<f32>() / (H * H) as f32;
+
+            print!("\r syncing...         ");
+            std::io::stdout().flush().unwrap();
             ctx.sync().unwrap();
 
-            ctx.save_tensors(PATH, &in_tensors, BpatHeader::BpatV2f32)
-                .unwrap();
+            println!("\r saved model @ loss {loss:?}");
         }
 
         epoch += 1;
