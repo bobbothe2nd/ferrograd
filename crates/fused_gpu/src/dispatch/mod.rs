@@ -186,12 +186,7 @@ pub trait GpuBackend: Sized {
     /// # Errors
     ///
     /// Should return an [`ErrorKind::FailedBufferCopy`](`crate::errors::ErrorKind::FailedBufferCopy`).
-    fn upload(
-        &self,
-        buffer: &Self::Buffer,
-        data: &[u8],
-        dst_off: u32,
-    ) -> Result<(), Error>;
+    fn upload(&self, buffer: &Self::Buffer, data: &[u8], dst_off: u32) -> Result<(), Error>;
 
     /// Copies the content of one buffer to another.
     ///
@@ -205,12 +200,7 @@ pub trait GpuBackend: Sized {
     /// # Errors
     ///
     /// Should return an [`ErrorKind::FailedBufferCopy`](`crate::errors::ErrorKind::FailedBufferCopy`).
-    fn download(
-        &self,
-        buffer: &Self::Buffer,
-        out: &mut [u8],
-        src_off: u32,
-    ) -> Result<(), Error>;
+    fn download(&self, buffer: &Self::Buffer, out: &mut [u8], src_off: u32) -> Result<(), Error>;
 
     /// Compiles the `RawKernel` (containing ops+vars) to a GPU kernel ([`Self::Kernel`]).
     ///
@@ -471,7 +461,12 @@ impl<B: GpuBackend> GpuContext<B> {
     /// Failure is platform-specific and backend-dependent. It might only return an error
     /// if buffer lengths are unequal, but its behavior should not be assumed. Errors
     /// must be handled properly in critical code.
-    pub fn download<T: Pod, S: ToBuffer<B>>(&self, tensor: &S, dst: &mut [T], src_off: u32) -> Result<(), Error> {
+    pub fn download<T: Pod, S: ToBuffer<B>>(
+        &self,
+        tensor: &S,
+        dst: &mut [T],
+        src_off: u32,
+    ) -> Result<(), Error> {
         self.inner
             .download(tensor.as_buffer(), slice_to_bytes_mut(dst), src_off)
     }
@@ -737,14 +732,20 @@ impl<B: GpuBackend> GpuContext<B> {
             bindings.push(&alloc_tensors.seed);
         }
 
-        let all_bindings = in_tensors.iter().enumerate().map(|(grad, weight)| {
-            let mut bindings = bindings.clone();
-            bindings[0] = &weight.data.inner;
-            bindings[1] = &alloc_tensors.grad_tensors[grad];
-            bindings
-        }).collect::<Vec<_>>();
+        let all_bindings = in_tensors
+            .iter()
+            .enumerate()
+            .map(|(grad, weight)| {
+                let mut bindings = bindings.clone();
+                bindings[0] = &weight.data.inner;
+                bindings[1] = &alloc_tensors.grad_tensors[grad];
+                bindings
+            })
+            .collect::<Vec<_>>();
 
-        let optim_sched = self.inner.schedule_parallel(&kernels.optim, &all_bindings, meta, meta_buf)?;
+        let optim_sched =
+            self.inner
+                .schedule_parallel(&kernels.optim, &all_bindings, meta, meta_buf)?;
 
         let optim = OptimSchedule {
             meta: meta_buf,
@@ -786,12 +787,8 @@ impl<B: GpuBackend> GpuContext<B> {
         )
     }
 
-    pub fn dispatch_optim(
-        &self,
-        schedule: &mut Schedule<'_, B>,
-    ) -> Result<(), Error> {
-        self.inner
-            .dispatch_schedule(&schedule.optim.schedule)
+    pub fn dispatch_optim(&self, schedule: &mut Schedule<'_, B>) -> Result<(), Error> {
+        self.inner.dispatch_schedule(&schedule.optim.schedule)
     }
 
     pub fn dispatch_single_optim(

@@ -58,9 +58,17 @@ impl DType {
     pub fn fmt_c(self) -> String {
         match self {
             Self::Simple(dtype) => dtype.fmt_c().to_string(),
-            Self::MmaA { dtype, m, n, k } => format!("fragment<matrix_a, {m}, {n}, {k}, {}, row_major>", dtype.fmt_c()),
-            Self::MmaB { dtype, m, n, k } => format!("fragment<matrix_b, {m}, {n}, {k}, {}, col_major>", dtype.fmt_c()),
-            Self::MmaAccum { dtype, m, n, k } => format!("fragment<accumulator, {m}, {n}, {k}, {}>", dtype.fmt_c()),
+            Self::MmaA { dtype, m, n, k } => format!(
+                "fragment<matrix_a, {m}, {n}, {k}, {}, row_major>",
+                dtype.fmt_c()
+            ),
+            Self::MmaB { dtype, m, n, k } => format!(
+                "fragment<matrix_b, {m}, {n}, {k}, {}, col_major>",
+                dtype.fmt_c()
+            ),
+            Self::MmaAccum { dtype, m, n, k } => {
+                format!("fragment<accumulator, {m}, {n}, {k}, {}>", dtype.fmt_c())
+            }
         }
     }
 
@@ -123,7 +131,7 @@ impl Axis {
 #[inline]
 pub fn newline(pretty_print: bool, out: &mut String, nesting: usize) {
     if pretty_print {
-        for _ in 0..(1 + nesting) {
+        for _ in 0..=nesting {
             out.push(' ');
         }
     } else {

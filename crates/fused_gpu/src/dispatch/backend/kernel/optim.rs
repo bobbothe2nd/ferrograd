@@ -4,6 +4,7 @@ use crate::{
         kernel::{Kernel, RawKernel},
     },
     errors::Error,
+    tensor::Block,
 };
 use std::{vec, vec::Vec};
 
@@ -19,7 +20,7 @@ pub fn lower_optim(graph: &Graph, meta: Metadata) -> Result<Kernel, Error> {
             shared: Vec::new(),
             values: Vec::new(),
             ops: Vec::new(),
-            block: [0; 3],
+            block: Block::ZERO3,
             root,
             iter_space: root_node.shape.clone(),
         },
@@ -32,9 +33,9 @@ pub fn lower_optim(graph: &Graph, meta: Metadata) -> Result<Kernel, Error> {
         .iter()
         .all(|x| x.op.is_elementwise() || x.op.is_leaf())
     {
-        kernel.raw.block = [256, 1, 1];
+        kernel.raw.block.dim3 = [256, 1, 1];
     } else {
-        kernel.raw.block = [16, 16, 1];
+        kernel.raw.block.dim3 = [16, 16, 1];
     }
 
     kernel.params.push(Param {
@@ -123,7 +124,10 @@ pub fn lower_optim(graph: &Graph, meta: Metadata) -> Result<Kernel, Error> {
     let lr = kernel.raw.def_var(
         DType::Simple(SimpleDType::F32),
         ValueState::Immut,
-        Some(Op::BitCast { id: lr, dtype: DType::Simple(SimpleDType::F32) }),
+        Some(Op::BitCast {
+            id: lr,
+            dtype: DType::Simple(SimpleDType::F32),
+        }),
     );
 
     let lr = if dtype == SimpleDType::F32 {
@@ -132,7 +136,10 @@ pub fn lower_optim(graph: &Graph, meta: Metadata) -> Result<Kernel, Error> {
         kernel.raw.def_var(
             DType::Simple(dtype),
             ValueState::Immut,
-            Some(Op::Cast { id: lr, dtype: DType::Simple(dtype) }),
+            Some(Op::Cast {
+                id: lr,
+                dtype: DType::Simple(dtype),
+            }),
         )
     };
 

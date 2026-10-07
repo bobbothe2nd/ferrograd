@@ -2,8 +2,7 @@ use fused_gpu::{
     dispatch::{
         CompilationOptions,
         backend::{
-            DType, Graph, NodeId, Op, Param, ParamId,
-            SimpleDType, ValueId, ValueState,
+            DType, Graph, NodeId, Op, Param, ParamId, SimpleDType, ValueId, ValueState,
             kernel::{LinkedKernel, NodeInput},
         },
     },

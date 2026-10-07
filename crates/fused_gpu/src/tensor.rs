@@ -2,9 +2,14 @@
 //!
 //! For more information, see [`Tensor`].
 
+use core::ops::Index;
+
 use std::vec::Vec;
 
-use crate::dispatch::{GpuBackend, GpuBuffer, backend::MetaId};
+use crate::dispatch::{
+    GpuBackend, GpuBuffer,
+    backend::{Axis, MetaId},
+};
 
 #[inline]
 #[must_use]
@@ -55,8 +60,53 @@ pub fn calc_grid(shape: &[u32], block: [u32; 3]) -> [u32; 3] {
 
 #[derive(Debug, Clone, Copy, Hash)]
 pub struct Block {
-    dim: [u32; 3],
-    compute_tile: fn(&[u32], [u32; 3]) -> [u32; 3],
+    pub dim3: [u32; 3],
+    pub calc_grid: Option<fn(&[u32], [u32; 3]) -> [u32; 3]>,
+}
+
+impl Index<usize> for Block {
+    type Output = u32;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        &self.dim3[index]
+    }
+}
+
+impl Index<Axis> for Block {
+    type Output = u32;
+
+    fn index(&self, index: Axis) -> &Self::Output {
+        &self.dim3[index as usize]
+    }
+}
+
+impl Block {
+    pub const ZERO3: Self = Self {
+        dim3: [0; 3],
+        calc_grid: None,
+    };
+    pub const UNIT: Self = Self {
+        dim3: [1; 3],
+        calc_grid: None,
+    };
+
+    #[inline]
+    #[must_use]
+    pub const fn new(dim3: [u32; 3]) -> Self {
+        Self {
+            dim3,
+            calc_grid: None,
+        }
+    }
+
+    #[inline]
+    #[must_use]
+    pub fn calc_grid(&self, shape: &[u32]) -> [u32; 3] {
+        self.calc_grid.map_or_else(
+            || calc_grid(shape, self.dim3),
+            |calc_grid| (calc_grid)(shape, self.dim3),
+        )
+    }
 }
 
 pub trait ToBuffer<B: GpuBackend> {

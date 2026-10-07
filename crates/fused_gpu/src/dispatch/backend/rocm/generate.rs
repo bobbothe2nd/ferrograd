@@ -2,12 +2,14 @@ use log::debug;
 
 use crate::{
     dispatch::{
-        CompilationOptions, DebugCompilationOptions, TargetFlags, backend::{
+        CompilationOptions, DebugCompilationOptions, TargetFlags,
+        backend::{
             DType, Op, Param, ParamTy, SharedAlloc, SimpleDType, ValueId,
             codegen::{self, def_var_c, newline},
             kernel::RawKernel,
         },
-    }, errors::Error,
+    },
+    errors::Error,
 };
 
 use core::fmt::Write;
@@ -27,11 +29,13 @@ pub fn generate_hip(
     .parse::<String>();
 
     if options.target.flags.contains(TargetFlags::LIN_ACC) {
-        out.push_str("#include <hip/hip_wmma.h>
+        out.push_str(
+            "#include <hip/hip_wmma.h>
 
 using namespace hip::wmma;
 
-");
+",
+        );
     }
 
     let pretty_print = options
@@ -384,7 +388,12 @@ fn process_op(
         }
 
         Op::Cast { id, dtype } => {
-            let _ = write!(out, "static_cast<{}>({})", dtype.fmt_c(), render_val(*id, kernel)?);
+            let _ = write!(
+                out,
+                "static_cast<{}>({})",
+                dtype.fmt_c(),
+                render_val(*id, kernel)?
+            );
         }
 
         Op::BitCast { id, dtype } => {
@@ -565,7 +574,7 @@ fn process_op(
         }
 
         Op::ForeverLoopBegin => {
-            let _ = write!(out, "for (;;) {{");
+            let _ = out.write_str("for (;;) {{");
             *nesting += 1;
         }
 
@@ -575,37 +584,83 @@ fn process_op(
         }
 
         Op::ElseBegin => {
-            let _ = write!(out, "else {{");
+            let _ = out.write_str("else {{");
             *nesting += 1;
         }
 
         Op::StartScope => {
-            let _ = write!(out, "{{");
+            let _ = out.write_str("{{");
             *nesting += 1;
         }
 
         Op::EndScope => {
-            let _ = write!(out, "}}");
+            let _ = out.write_str("}}");
             *nesting -= 1;
         }
 
         Op::Barrier => {
-            let _ = write!(out, "__syncthreads();");
+            let _ = out.write_str("__syncthreads();");
         }
 
         Op::Return => {
-            let _ = write!(out, "return;");
+            let _ = out.write_str("return;");
         }
 
         Op::Continue => {
-            let _ = write!(out, "continue;");
+            let _ = out.write_str("continue;");
         }
 
         Op::Break => {
-            let _ = write!(out, "break;");
+            let _ = out.write_str("break;");
         }
 
-        _ => todo!("MMA not supported"),
+        Op::FillFragment { frag, val } => {
+            let _ = write!(
+                out,
+                "fill_fragment({}, {});",
+                render_val(*frag, kernel)?,
+                render_val(*val, kernel)?
+            );
+        }
+
+        Op::LoadMatrixSync {
+            frag,
+            index,
+            stride,
+        } => {
+            let _ = write!(
+                out,
+                "load_matrix_sync({}, {}, {});",
+                render_val(*frag, kernel)?,
+                render_val(*index, kernel)?,
+                render_val(*stride, kernel)?
+            );
+        }
+
+        Op::MmaSync { acc, a, b, c } => {
+            let _ = write!(
+                out,
+                "mma_sync({}, {}, {}, {});",
+                render_val(*acc, kernel)?,
+                render_val(*a, kernel)?,
+                render_val(*b, kernel)?,
+                render_val(*c, kernel)?
+            );
+        }
+
+        Op::StoreMatrixSync {
+            index,
+            frag,
+            stride,
+        } => {
+            let _ = write!(
+                out,
+                "store_matrix_sync({}, {}, {}, mem_row_major);",
+                render_val(*index, kernel)?,
+                render_val(*frag, kernel)?,
+                render_val(*stride, kernel)?
+            );
+        }
     }
 
     Ok(())

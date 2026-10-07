@@ -74,10 +74,7 @@ pub mod nn {
 
 pub mod codegen {
     pub use fused_gpu::dispatch::backend::{
-        kernel::remap::*,
-        codegen::*,
-        wgsl::generate::generate_wgsl,
-        rocm::generate::generate_hip,
+        codegen::*, kernel::remap::*, rocm::generate::generate_hip, wgsl::generate::generate_wgsl,
     };
 }
 

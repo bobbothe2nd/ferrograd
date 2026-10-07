@@ -29,7 +29,10 @@ fn main() {
     const D_VAL: f32 = 0.007;
     const E_VAL: f32 = 0.008;
 
-    stderrlog::new().verbosity(log::Level::Debug).init().unwrap();
+    stderrlog::new()
+        .verbosity(log::Level::Debug)
+        .init()
+        .unwrap();
 
     let mut meta = Metadata::new();
     let m = meta.new_field();
@@ -128,13 +131,15 @@ fn main() {
 
     let target = {
         let val = 2.0 * (rng.next_u32() as f32 / u32::MAX as f32) - 1.0;
-        ctx.init_tensor_f32(&[H, H], &[val; (H * H) as usize]).unwrap()
+        ctx.init_tensor_f32(&[H, H], &[val; (H * H) as usize])
+            .unwrap()
     };
 
     loop {
         {
             let val = 2.0 * (rng.next_u32() as f32 / u32::MAX as f32) - 1.0;
-            ctx.upload(&target, &[val; H as usize], H * (epoch as u32 % H)).unwrap()
+            ctx.upload(&target, &[val; H as usize], H * (epoch as u32 % H))
+                .unwrap()
         }
 
         {
@@ -158,7 +163,8 @@ fn main() {
         if epoch % EPOCHS_TO_SAVE == EPOCHS_TO_SAVE - 1 {
             print!(" saving...");
             std::io::stdout().flush().unwrap();
-            ctx.save_tensors(PATH, &in_tensors, BpatHeader::BpatV2f32).unwrap();
+            ctx.save_tensors(PATH, &in_tensors, BpatHeader::BpatV2f32)
+                .unwrap();
 
             print!("\r calculating loss...");
             std::io::stdout().flush().unwrap();

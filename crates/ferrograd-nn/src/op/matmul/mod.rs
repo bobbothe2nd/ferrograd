@@ -1,11 +1,13 @@
 use fused_gpu::{
     dispatch::{
-        CompilationOptions, TargetFlags, backend::{
+        CompilationOptions, TargetFlags,
+        backend::{
             Axis, DType, DispatchOptions, Graph, GraphOp, Node, NodeId, Op, Param, ParamId,
             SimpleDType, ValueId, ValueState,
             kernel::{LinkedKernel, NodeInput, SaveIndicator},
         },
-    }, errors::{Error, ErrorKind, GraphErrorContext},
+    },
+    errors::{Error, ErrorKind, GraphErrorContext},
 };
 use std::{format, vec, vec::Vec};
 

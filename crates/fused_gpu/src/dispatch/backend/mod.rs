@@ -206,12 +206,7 @@ impl GpuBackend for NopGpuContext {
         })
     }
 
-    fn upload(
-        &self,
-        _buffer: &Self::Buffer,
-        _data: &[u8],
-        _dst_off: u32,
-    ) -> Result<(), Error> {
+    fn upload(&self, _buffer: &Self::Buffer, _data: &[u8], _dst_off: u32) -> Result<(), Error> {
         Err(Error {
             msg: "using nop backend",
             kind: ErrorKind::UnsupportedFeature,
@@ -248,9 +243,24 @@ pub type ValueId = usize;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DType {
     Simple(SimpleDType),
-    MmaA { dtype: SimpleDType, m: u32, n: u32, k: u32 },
-    MmaB { dtype: SimpleDType, m: u32, n: u32, k: u32 },
-    MmaAccum { dtype: SimpleDType, m: u32, n: u32, k: u32 },
+    MmaA {
+        dtype: SimpleDType,
+        m: u32,
+        n: u32,
+        k: u32,
+    },
+    MmaB {
+        dtype: SimpleDType,
+        m: u32,
+        n: u32,
+        k: u32,
+    },
+    MmaAccum {
+        dtype: SimpleDType,
+        m: u32,
+        n: u32,
+        k: u32,
+    },
 }
 
 impl DType {
@@ -384,12 +394,8 @@ impl SimpleDType {
     #[inline]
     pub const fn constant_min(self) -> Result<Op, Error> {
         match self {
-            Self::BF16 => Ok(Op::ConstBf16 {
-                value: bf16::MIN,
-            }),
-            Self::F16 => Ok(Op::ConstF16 {
-                value: f16::MIN,
-            }),
+            Self::BF16 => Ok(Op::ConstBf16 { value: bf16::MIN }),
+            Self::F16 => Ok(Op::ConstF16 { value: f16::MIN }),
             Self::F32 => Ok(Op::ConstF32 { value: f32::MIN }),
             Self::F64 => Ok(Op::ConstF64 { value: f64::MIN }),
             Self::I32 => Ok(Op::ConstI32 { value: i32::MIN }),
@@ -405,12 +411,8 @@ impl SimpleDType {
     #[inline]
     pub const fn constant_max(self) -> Result<Op, Error> {
         match self {
-            Self::BF16 => Ok(Op::ConstBf16 {
-                value: bf16::MAX,
-            }),
-            Self::F16 => Ok(Op::ConstF16 {
-                value: f16::MAX,
-            }),
+            Self::BF16 => Ok(Op::ConstBf16 { value: bf16::MAX }),
+            Self::F16 => Ok(Op::ConstF16 { value: f16::MAX }),
             Self::F32 => Ok(Op::ConstF32 { value: f32::MAX }),
             Self::F64 => Ok(Op::ConstF64 { value: f64::MAX }),
             Self::I32 => Ok(Op::ConstI32 { value: i32::MAX }),

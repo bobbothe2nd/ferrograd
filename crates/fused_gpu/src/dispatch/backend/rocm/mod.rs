@@ -4,12 +4,12 @@ use rocm_rt::hip::{graph::StreamCaptureMode, module::Module};
 pub use rocm_rt::{
     hip::{
         HipError,
+        callback::Callback,
         device::Device,
-        graph::{ExecGraph, GraphInstantiateFlags, KernelParams, Node, Graph},
+        graph::{ExecGraph, Graph, GraphInstantiateFlags, KernelParams, Node},
         memory::{Buffer, DevMapped, DevMappedAlloc},
         module::{Func, LaunchConfig},
         stream::Stream,
-        callback::Callback,
     },
     hiprtc::{
         HiprtcError,
@@ -18,19 +18,23 @@ pub use rocm_rt::{
     shared::{GfxVersion, MatrixKind},
 };
 
-use core::ptr::from_ref;
-use std::{marker::PhantomData, rc::Rc};
+use core::{marker::PhantomData, ptr::from_ref};
+use std::rc::Rc;
 
 use briny::raw::cast::slice_to_bytes;
 
 use crate::{
     dispatch::{
-        CompilationOptions, GpuBackend, GpuBufferBackend, GpuKernelBackend, TargetCompilationOptions, TargetFlags, backend::{
-            MetaId, NodeId, Param, kernel::{
-                Dependencies, RawKernel, Redirect, remap::eval_dependency_order,
-            }, rocm::generate::generate_hip,
+        CompilationOptions, GpuBackend, GpuBufferBackend, GpuKernelBackend,
+        TargetCompilationOptions, TargetFlags,
+        backend::{
+            MetaId, NodeId, Param,
+            kernel::{Dependencies, RawKernel, Redirect, remap::eval_dependency_order},
+            rocm::generate::generate_hip,
         },
-    }, errors::{Error, ErrorKind}, tensor::{build_dims, calc_grid},
+    },
+    errors::{Error, ErrorKind},
+    tensor::{build_dims, calc_grid},
 };
 
 pub mod generate;
@@ -85,7 +89,10 @@ impl GpuBackend for GpuContext {
     }
 
     fn alloc_zeroed(&self, len: u32) -> Result<Self::Buffer, Error> {
-        map_err!(self.device.alloc_zeroed(len), "failed to allocate GPU buffer")
+        map_err!(
+            self.device.alloc_zeroed(len),
+            "failed to allocate GPU buffer"
+        )
     }
 
     fn alloc_init(&self, data: &[u8]) -> Result<Self::Buffer, Error> {
@@ -156,7 +163,7 @@ impl GpuBackend for GpuContext {
         )?;
 
         Ok(Kernel {
-            block: src.block,
+            block: src.block.dim3,
             iter_space: src.iter_space.clone().into_boxed_slice(),
             func,
         })
@@ -238,10 +245,7 @@ impl GpuBackend for GpuContext {
         }
     }
 
-    fn dispatch_schedule(
-        &self,
-        schedule: &Self::Schedule<'_>,
-    ) -> Result<(), Error> {
+    fn dispatch_schedule(&self, schedule: &Self::Schedule<'_>) -> Result<(), Error> {
         unsafe extern "C" fn drop_rc(data: *mut u8) {
             let _ = unsafe { Rc::from_raw(data.cast::<ScheduleInner<'_>>()) };
         }
@@ -277,7 +281,7 @@ impl GpuBackend for GpuContext {
         let grid = calc_grid(&iter_space, *kernel.block());
 
         for bindings in bindings {
-            let mut kernel_bindings =  Vec::with_capacity(1 + bindings.len());
+            let mut kernel_bindings = Vec::with_capacity(1 + bindings.len());
 
             kernel_bindings.push(from_ref(meta_buf) as *mut u8);
 
@@ -287,19 +291,20 @@ impl GpuBackend for GpuContext {
 
             unsafe {
                 map_err!(
-                    self.stream.launch(&kernel.func, &mut kernel_bindings, LaunchConfig {
-                        grid,
-                        block: kernel.block,
-                    }),
+                    self.stream.launch(
+                        &kernel.func,
+                        &mut kernel_bindings,
+                        LaunchConfig {
+                            grid,
+                            block: kernel.block,
+                        }
+                    ),
                     "failed to launch kernel"
                 )?;
             }
         }
 
-        let graph = map_err!(
-            self.stream.end_capture(),
-            "failed to end capture"
-        )?;
+        let graph = map_err!(self.stream.end_capture(), "failed to end capture")?;
         let graph = map_err!(
             graph.init(GraphInstantiateFlags::empty()),
             "faield to instantiate graph"
@@ -342,10 +347,14 @@ impl GpuBackend for GpuContext {
 
             unsafe {
                 map_err!(
-                    self.stream.launch(&kernel.func, &mut kernel_args, LaunchConfig {
-                        grid,
-                        block: kernel.block,
-                    }),
+                    self.stream.launch(
+                        &kernel.func,
+                        &mut kernel_args,
+                        LaunchConfig {
+                            grid,
+                            block: kernel.block,
+                        }
+                    ),
                     "failed to launch kernel"
                 )?;
             }
@@ -353,10 +362,7 @@ impl GpuBackend for GpuContext {
             Ok(())
         })?;
 
-        let graph = map_err!(
-            self.stream.end_capture(),
-            "failed to end capture"
-        )?;
+        let graph = map_err!(self.stream.end_capture(), "failed to end capture")?;
         let graph = map_err!(
             graph.init(GraphInstantiateFlags::empty()),
             "faield to instantiate graph"
@@ -364,10 +370,12 @@ impl GpuBackend for GpuContext {
 
         let kernels = kernels
             .iter()
-            .filter_map(|kernel| if let Redirect::Unmasked((kernel, ..)) = &kernel.val {
-                Some(kernel.func.module_handle())
-            } else {
-                None
+            .filter_map(|kernel| {
+                if let Redirect::Unmasked((kernel, ..)) = &kernel.val {
+                    Some(kernel.func.module_handle())
+                } else {
+                    None
+                }
             })
             .collect();
 
@@ -391,16 +399,11 @@ impl GpuBackend for GpuContext {
         map_err!(self.stream.sync(), "failed to synchronize stream")
     }
 
-    fn upload(
-        &self,
-        buffer: &Self::Buffer,
-        data: &[u8],
-        dst_off: u32,
-    ) -> Result<(), Error> {
+    fn upload(&self, buffer: &Self::Buffer, data: &[u8], dst_off: u32) -> Result<(), Error> {
         let host_buf = unsafe { DevMapped::from_slice(data) };
 
         let just_mapped = match unsafe { host_buf.map() } {
-            Ok(_) => true,
+            Ok(()) => true,
             Err(HipError::HostMemoryAlreadyRegistered) => false,
             e => return map_err!(e, "failed to register host memory"),
         };

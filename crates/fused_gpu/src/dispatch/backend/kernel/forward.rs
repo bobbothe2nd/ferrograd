@@ -10,6 +10,7 @@ use crate::{
         },
     },
     errors::{Error, ErrorKind},
+    tensor::Block,
 };
 use core::cmp::Ordering;
 use std::{vec, vec::Vec};
@@ -110,7 +111,7 @@ pub fn lower_forward<'a>(
                     shared: Vec::new(),
                     values: Vec::new(),
                     ops: Vec::new(),
-                    block: [tile_size, tile_size, 1],
+                    block: Block::new([tile_size, tile_size, 1]),
                     root,
                     iter_space: root_node.shape.clone(),
                 },
@@ -247,11 +248,11 @@ pub fn lower_forward<'a>(
                         DispatchOptions::Any => {}
 
                         DispatchOptions::ReqRow => {
-                            kernel.raw.block = [1, shared_size, 1];
+                            kernel.raw.block.dim3 = [1, shared_size, 1];
                         }
 
                         DispatchOptions::ReqCol => {
-                            kernel.raw.block = [shared_size, 1, 1];
+                            kernel.raw.block.dim3 = [shared_size, 1, 1];
                         }
                     }
                 }

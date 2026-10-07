@@ -57,8 +57,7 @@ fn mul_add_optim() {
         ctx.init_tensor_f32(&[32, 32], &[1.0; 1024]).unwrap(),
     ];
 
-    ctx.upload(&saved_tensors.seed, &[1_f32; 1024], 0)
-        .unwrap();
+    ctx.upload(&saved_tensors.seed, &[1_f32; 1024], 0).unwrap();
 
     let mut schedule = ctx
         .schedule(
@@ -155,8 +154,7 @@ fn mul_add_separate_optim() {
         ctx.init_tensor_f32(&[32, 32], &[1.0; 1024]).unwrap(),
     ];
 
-    ctx.upload(&saved_tensors.seed, &[1_f32; 1024], 0)
-        .unwrap();
+    ctx.upload(&saved_tensors.seed, &[1_f32; 1024], 0).unwrap();
 
     let mut schedule = ctx
         .schedule(

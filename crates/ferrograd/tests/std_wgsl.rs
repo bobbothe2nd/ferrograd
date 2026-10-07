@@ -57,8 +57,7 @@ fn mul_add_forward_backward() {
         ctx.init_tensor_f32(&[32, 32], &[1.0; 1024]).unwrap(),
     ];
 
-    ctx.upload(&saved_tensors.seed, &[1_f32; 1024], 0)
-        .unwrap();
+    ctx.upload(&saved_tensors.seed, &[1_f32; 1024], 0).unwrap();
 
     let schedule = ctx
         .schedule(
@@ -234,8 +233,7 @@ fn div_const_softmax_forward_backward() {
 
     let in_tensors = [ctx.init_tensor_f32(&[16, 32], &[3.0; 512]).unwrap()];
 
-    ctx.upload(&saved_tensors.seed, &[1_f32; 512], 0)
-        .unwrap();
+    ctx.upload(&saved_tensors.seed, &[1_f32; 512], 0).unwrap();
 
     let schedule = ctx
         .schedule(

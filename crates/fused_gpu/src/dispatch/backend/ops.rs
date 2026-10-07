@@ -295,22 +295,23 @@ pub enum Op {
 
     /// Tensor/matrix core requires `TargetCompilationOptions::LIN_ACC`
     MmaSync {
+        acc: ValueId,
         a: ValueId,
         b: ValueId,
-        acc: ValueId,
+        c: ValueId,
     },
 
     /// Tensor/matrix core requires `TargetCompilationOptions::LIN_ACC`
     LoadMatrixSync {
-        out: ValueId,
+        frag: ValueId,
         index: ValueId,
         stride: ValueId,
     },
 
     /// Tensor/matrix core requires `TargetCompilationOptions::LIN_ACC`
     StoreMatrixSync {
-        index: ValueId,
         frag: ValueId,
+        index: ValueId,
         stride: ValueId,
     },
 
@@ -380,7 +381,9 @@ impl Op {
             | Self::ShrAssign { val, .. }
             | Self::SubAssign { val, .. }
             | Self::OverwriteVar { val, .. } => val == &value_id,
-            Self::ForLoopBegin { index, end, step } => index == &value_id || end == &value_id || step == &value_id,
+            Self::ForLoopBegin { index, end, step } => {
+                index == &value_id || end == &value_id || step == &value_id
+            }
             Self::IfBegin { cond } => cond == &value_id,
             Self::ParamAccum { index, value, .. }
             | Self::ParamDiv { index, value, .. }
@@ -398,9 +401,19 @@ impl Op {
             | Self::SharedSub { index, value, .. } => index == &value_id || value == &value_id,
             Self::ParamLoad { index, .. } | Self::SharedLoad { index, .. } => index == &value_id,
             Self::Select { cond, a, b } => cond == &value_id || a == &value_id || b == &value_id,
-            Self::MmaSync { a, b, acc } => a == &value_id || b == &value_id || acc == &value_id,
-            Self::LoadMatrixSync { out, index, stride } => out == &value_id || index == &value_id || stride == &value_id,
-            Self::StoreMatrixSync { index, frag, stride } => index == &value_id || frag == &value_id || stride == &value_id,
+            Self::MmaSync { acc, a, b, c } => {
+                a == &value_id || b == &value_id || c == &value_id || acc == &value_id
+            }
+            Self::LoadMatrixSync {
+                frag,
+                index,
+                stride,
+            }
+            | Self::StoreMatrixSync {
+                frag,
+                index,
+                stride,
+            } => index == &value_id || frag == &value_id || stride == &value_id,
             Self::FillFragment { frag, val } => frag == &value_id || val == &value_id,
         }
     }
@@ -490,17 +503,26 @@ impl Op {
                 replace_if_eq(a, old_id, new_id);
                 replace_if_eq(b, old_id, new_id);
             }
-            Self::MmaSync { a, b, acc } => {
+            Self::MmaSync { a, b, c, acc } => {
                 replace_if_eq(a, old_id, new_id);
                 replace_if_eq(b, old_id, new_id);
+                replace_if_eq(c, old_id, new_id);
                 replace_if_eq(acc, old_id, new_id);
             }
-            Self::LoadMatrixSync { out, index, stride } => {
-                replace_if_eq(out, old_id, new_id);
+            Self::LoadMatrixSync {
+                frag,
+                index,
+                stride,
+            } => {
+                replace_if_eq(frag, old_id, new_id);
                 replace_if_eq(index, old_id, new_id);
                 replace_if_eq(stride, old_id, new_id);
             }
-            Self::StoreMatrixSync { index, frag, stride } => {
+            Self::StoreMatrixSync {
+                index,
+                frag,
+                stride,
+            } => {
                 replace_if_eq(index, old_id, new_id);
                 replace_if_eq(frag, old_id, new_id);
                 replace_if_eq(stride, old_id, new_id);
@@ -567,7 +589,9 @@ impl Op {
             | Self::Sub { a, b }
             | Self::Shl { a, b }
             | Self::Shr { a, b } => not_mut(*a, kernel) && not_mut(*b, kernel),
-            Self::Fma { a, b, c } => not_mut(*a, kernel) && not_mut(*b, kernel) && not_mut(*c, kernel),
+            Self::Fma { a, b, c } => {
+                not_mut(*a, kernel) && not_mut(*b, kernel) && not_mut(*c, kernel)
+            }
             Self::AddAssign { val, id }
             | Self::DivAssign { val, id }
             | Self::MulAssign { val, id }
@@ -575,7 +599,9 @@ impl Op {
             | Self::ShrAssign { val, id }
             | Self::SubAssign { val, id }
             | Self::OverwriteVar { val, id } => not_mut(*val, kernel) && not_mut(*id, kernel),
-            Self::ForLoopBegin { index, end, step } => not_mut(*index, kernel) && not_mut(*end, kernel) && not_mut(*step, kernel),
+            Self::ForLoopBegin { index, end, step } => {
+                not_mut(*index, kernel) && not_mut(*end, kernel) && not_mut(*step, kernel)
+            }
             Self::IfBegin { cond } => not_mut(*cond, kernel),
             Self::ParamAccum { index, value, .. }
             | Self::ParamDiv { index, value, .. }
@@ -590,12 +616,31 @@ impl Op {
             | Self::SharedShl { index, value, .. }
             | Self::SharedShr { index, value, .. }
             | Self::SharedStore { index, value, .. }
-            | Self::SharedSub { index, value, .. } => not_mut(*index, kernel) && not_mut(*value, kernel),
-            Self::ParamLoad { index, .. } | Self::SharedLoad { index, .. } => not_mut(*index, kernel),
-            Self::Select { cond, a, b } => not_mut(*cond, kernel) && not_mut(*a, kernel) && not_mut(*b, kernel),
-            Self::MmaSync { a, b, acc } => not_mut(*a, kernel) && not_mut(*b, kernel) && not_mut(*acc, kernel),
-            Self::LoadMatrixSync { out, index, stride } => not_mut(*out, kernel) && not_mut(*index, kernel) && not_mut(*stride, kernel),
-            Self::StoreMatrixSync { frag, index, stride } => not_mut(*frag, kernel) && not_mut(*index, kernel) && not_mut(*stride, kernel),
+            | Self::SharedSub { index, value, .. } => {
+                not_mut(*index, kernel) && not_mut(*value, kernel)
+            }
+            Self::ParamLoad { index, .. } | Self::SharedLoad { index, .. } => {
+                not_mut(*index, kernel)
+            }
+            Self::Select { cond, a, b } => {
+                not_mut(*cond, kernel) && not_mut(*a, kernel) && not_mut(*b, kernel)
+            }
+            Self::MmaSync { a, b, c, acc } => {
+                not_mut(*a, kernel)
+                    && not_mut(*b, kernel)
+                    && not_mut(*c, kernel)
+                    && not_mut(*acc, kernel)
+            }
+            Self::LoadMatrixSync {
+                frag,
+                index,
+                stride,
+            }
+            | Self::StoreMatrixSync {
+                frag,
+                index,
+                stride,
+            } => not_mut(*frag, kernel) && not_mut(*index, kernel) && not_mut(*stride, kernel),
             Self::FillFragment { frag, val } => not_mut(*frag, kernel) && not_mut(*val, kernel),
             Self::Barrier
             | Self::BlockId { .. }
@@ -634,7 +679,7 @@ impl Op {
             | Self::OverwriteVar { id, .. }
             | Self::ForLoopBegin { index: id, .. }
             | Self::FillFragment { frag: id, .. }
-            | Self::LoadMatrixSync { out: id, .. }
+            | Self::LoadMatrixSync { frag: id, .. }
             | Self::SharedStore { mem: id, .. }
             | Self::MmaSync { acc: id, .. } => id == &value_id,
             _ => false,
@@ -655,7 +700,7 @@ impl Op {
             | Self::OverwriteVar { id, .. }
             | Self::ForLoopBegin { index: id, .. }
             | Self::FillFragment { frag: id, .. }
-            | Self::LoadMatrixSync { out: id, .. }
+            | Self::LoadMatrixSync { frag: id, .. }
             | Self::SharedStore { mem: id, .. }
             | Self::MmaSync { acc: id, .. } => Some(*id),
             _ => None,
@@ -675,7 +720,7 @@ impl Op {
             | Self::OverwriteVar { id, .. }
             | Self::ForLoopBegin { index: id, .. }
             | Self::FillFragment { frag: id, .. }
-            | Self::LoadMatrixSync { out: id, .. }
+            | Self::LoadMatrixSync { frag: id, .. }
             | Self::SharedStore { mem: id, .. }
             | Self::MmaSync { acc: id, .. } => id == &value_id,
             _ => false,

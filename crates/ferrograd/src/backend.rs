@@ -205,10 +205,7 @@ impl<B: GpuBackend> GpuContext<B> {
         self.0.dispatch_backward(schedule)
     }
 
-    pub fn dispatch_optim(
-        &self,
-        schedule: &mut Schedule<'_, B>,
-    ) -> Result<(), Error> {
+    pub fn dispatch_optim(&self, schedule: &mut Schedule<'_, B>) -> Result<(), Error> {
         self.0.dispatch_optim(schedule)
     }
 
@@ -219,7 +216,8 @@ impl<B: GpuBackend> GpuContext<B> {
         grad: usize,
         tensors: &AllocTensors<B>,
     ) -> Result<(), Error> {
-        self.0.dispatch_single_optim(schedule, weight, grad, tensors)
+        self.0
+            .dispatch_single_optim(schedule, weight, grad, tensors)
     }
 
     pub fn dispatch_loss(
@@ -231,7 +229,12 @@ impl<B: GpuBackend> GpuContext<B> {
     }
 
     #[inline]
-    pub fn download<T: Pod, S: ToBuffer<B>>(&self, tensor: &S, dst: &mut [T], src_off: u32) -> Result<(), Error> {
+    pub fn download<T: Pod, S: ToBuffer<B>>(
+        &self,
+        tensor: &S,
+        dst: &mut [T],
+        src_off: u32,
+    ) -> Result<(), Error> {
         self.0.download(tensor, dst, src_off)
     }
 
@@ -475,12 +478,12 @@ impl GpuBackend for Dynamic {
             Self::Wgsl(ctx) => {
                 let bindings = bindings
                     .iter()
-                    .map(|val| val
-                        .iter()
-                        .copied()
-                        .map(|binding| binding.into())
-                        .collect::<Vec<_>>()
-                    )
+                    .map(|val| {
+                        val.iter()
+                            .copied()
+                            .map(|binding| binding.into())
+                            .collect::<Vec<_>>()
+                    })
                     .collect::<Vec<_>>();
 
                 ctx.schedule_parallel(kernel.into(), &bindings, meta, meta_buf.into())?
@@ -490,12 +493,12 @@ impl GpuBackend for Dynamic {
             Self::Rocm(ctx) => {
                 let bindings = bindings
                     .iter()
-                    .map(|val| val
-                        .iter()
-                        .copied()
-                        .map(|binding| binding.into())
-                        .collect::<Vec<_>>()
-                    )
+                    .map(|val| {
+                        val.iter()
+                            .copied()
+                            .map(|binding| binding.into())
+                            .collect::<Vec<_>>()
+                    })
                     .collect::<Vec<_>>();
 
                 ctx.schedule_parallel(kernel.into(), &bindings, meta, meta_buf.into())?

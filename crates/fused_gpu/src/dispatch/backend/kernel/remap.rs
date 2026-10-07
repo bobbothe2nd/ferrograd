@@ -190,8 +190,8 @@ pub fn remap_kernels<K>(
         kernels: &[Dependencies<Redirect<(K, NodeId, &[bool])>>],
         f: F,
     ) -> Result<C, Error>
-    where 
-        F: FnOnce(&(K, NodeId, &[bool])) -> C
+    where
+        F: FnOnce(&(K, NodeId, &[bool])) -> C,
     {
         match val {
             Redirect::Unmasked(val) => Ok(f(val)),

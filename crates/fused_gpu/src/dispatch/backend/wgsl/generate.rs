@@ -468,7 +468,12 @@ fn process_op(
         }
 
         Op::BitCast { id, dtype } => {
-            let _ = write!(out, "bitcast<{}>({})", dtype.fmt_wgsl()?, render_val(*id, kernel)?);
+            let _ = write!(
+                out,
+                "bitcast<{}>({})",
+                dtype.fmt_wgsl()?,
+                render_val(*id, kernel)?
+            );
         }
 
         Op::ParamStore {

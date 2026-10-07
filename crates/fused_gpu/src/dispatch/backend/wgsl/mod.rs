@@ -212,12 +212,7 @@ impl GpuBackend for GpuContext {
     }
 
     #[inline]
-    fn upload(
-        &self,
-        buffer: &Self::Buffer,
-        data: &[u8],
-        dst_off: u32,
-    ) -> Result<(), Error> {
+    fn upload(&self, buffer: &Self::Buffer, data: &[u8], dst_off: u32) -> Result<(), Error> {
         if (buffer.size_bytes().saturating_sub(dst_off) as usize) < data.len() {
             return Err(Error {
                 msg: "GPU buffer of smaller size than CPU buffer during upload",
@@ -234,13 +229,7 @@ impl GpuBackend for GpuContext {
             contents: data,
             usage: BufferUsages::STORAGE | BufferUsages::COPY_SRC,
         });
-        encoder.copy_buffer_to_buffer(
-            &src,
-            0,
-            buffer,
-            dst_off as u64,
-            Some(data.len() as u64),
-        );
+        encoder.copy_buffer_to_buffer(&src, 0, buffer, dst_off as u64, Some(data.len() as u64));
 
         self.queue.submit(Some(encoder.finish()));
 
@@ -270,12 +259,7 @@ impl GpuBackend for GpuContext {
     }
 
     #[inline]
-    fn download(
-        &self,
-        buffer: &Self::Buffer,
-        out: &mut [u8],
-        src_off: u32,
-    ) -> Result<(), Error> {
+    fn download(&self, buffer: &Self::Buffer, out: &mut [u8], src_off: u32) -> Result<(), Error> {
         let mut encoder = self
             .device
             .create_command_encoder(&CommandEncoderDescriptor::default());
@@ -365,7 +349,7 @@ impl GpuBackend for GpuContext {
                     cache: None,
                 }),
             iter_space: src.iter_space.clone(),
-            block: src.block,
+            block: src.block.dim3,
         })
     }
 
@@ -384,7 +368,7 @@ impl GpuBackend for GpuContext {
         let kernel = &kernel.kernel;
 
         for bindings in bindings {
-            let mut kernel_bindings =  Vec::with_capacity(1 + bindings.len());
+            let mut kernel_bindings = Vec::with_capacity(1 + bindings.len());
 
             kernel_bindings.push(BindGroupEntry {
                 binding: 0,

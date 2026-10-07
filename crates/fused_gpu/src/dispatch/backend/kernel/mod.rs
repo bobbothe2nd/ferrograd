@@ -7,6 +7,7 @@ use crate::{
         },
     },
     errors::{Error, ErrorKind},
+    tensor::Block,
 };
 use std::vec::Vec;
 
@@ -394,7 +395,7 @@ pub struct RawKernel {
 
     pub ops: Vec<Op>,
 
-    pub block: [u32; 3],
+    pub block: Block,
 
     pub iter_space: Vec<MetaId>,
 
